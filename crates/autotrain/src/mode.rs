@@ -32,6 +32,7 @@ impl Mode {
 
     pub async fn run() {
         let client = rbp_database::db().await;
+        ensure_schema(&client).await;
         match Self::from_args() {
             Self::Fast => FastSession::new(client).await.train().await,
             Self::Slow => SlowSession::new(client).await.train().await,

@@ -22,6 +22,7 @@ mod epoch;
 mod fast;
 mod mode;
 mod pretraining;
+mod schema;
 mod slow;
 mod trainer;
 
@@ -31,6 +32,7 @@ pub use epoch::*;
 pub use fast::*;
 pub use mode::*;
 pub use pretraining::*;
+pub use schema::*;
 pub use slow::*;
 pub use trainer::*;
 pub use workers::*;
