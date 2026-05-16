@@ -197,8 +197,8 @@ pub const CFR_BATCH_SIZE_RPS: usize = 1;
 pub const CFR_TREE_COUNT_RPS: usize = 8192;
 /// Trees sampled per NLHE iteration (parallelized across threads).
 pub const CFR_BATCH_SIZE_NLHE: usize = 128;
-/// Total NLHE training budget (~268M trees for production).
-pub const CFR_TREE_COUNT_NLHE: usize = 0x10000000;
+/// Total NLHE training budget (~201M trees, sized for 192 GB instance).
+pub const CFR_TREE_COUNT_NLHE: usize = 0xC000000;
 /// Trees sampled per river-only iteration (testing/debugging).
 pub const CFR_BATCH_SIZE_RIVER: usize = 16;
 /// River-only training budget (~65K trees).
