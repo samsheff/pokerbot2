@@ -79,7 +79,7 @@ mod tests {
         let pot_before = game.pot();
         {
             let mut dealer = Dealer::new(&mut game);
-            dealer.apply(Action::Call(1));
+            dealer.apply(Action::Call(2)); // UTG calls BB amount
         }
         assert!(game.pot() > pot_before);
     }
@@ -88,8 +88,13 @@ mod tests {
         let mut game = Game::root();
         {
             let mut dealer = Dealer::new(&mut game);
-            dealer.apply(Action::Call(1));
-            dealer.apply(Action::Check);
+            // 4 folds (UTG–BTN) + SB calls + BB checks → chance node
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Call(1)); // SB calls
+            dealer.apply(Action::Check);   // BB checks
             assert!(dealer.is_chance());
             let street = dealer.deal();
             assert_eq!(street, Street::Flop);
@@ -100,8 +105,13 @@ mod tests {
         let mut game = Game::root();
         {
             let mut dealer = Dealer::new(&mut game);
-            dealer.apply(Action::Call(1));
-            // BB can check after limp
+            // fold UTG–BTN, SB limps → BB gets option to check
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Call(1)); // SB limps
+            // BB can check after limp (no raise to face)
             assert_eq!(dealer.passive(), Action::Check);
         }
     }
@@ -118,6 +128,11 @@ mod tests {
         let mut game = Game::root();
         {
             let mut dealer = Dealer::new(&mut game);
+            // all 5 non-BB players fold → BB wins → terminal
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
             dealer.apply(Action::Fold);
             assert!(dealer.is_terminal());
         }

@@ -468,10 +468,10 @@ mod tests {
     #[test]
     fn reset_idempotent() {
         let r = Partial::initial(Turn::Choice(0))
-            .push(Action::Call(1))
-            .push(Action::Raise(5))
-            .push(Action::Raise(20))
-            .push(Action::Call(15));
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Fold);
         assert_eq!(r.reset(), r.reset().reset());
     }
 
@@ -504,7 +504,7 @@ mod tests {
     /// states length = actions length + 1 (root state plus one state per action)
     #[test]
     fn states_reconstruction() {
-        let r = Partial::initial(Turn::Choice(0)).push(Action::Call(1));
+        let r = Partial::initial(Turn::Choice(0)).push(Action::Fold);
         let states = r.states();
         assert_eq!(states.len(), r.actions().len() + 1);
         assert_eq!(states.first(), Some(&r.root()));
@@ -520,7 +520,7 @@ mod tests {
     fn subgame_current_street() {
         let r = Partial::initial(Turn::Choice(0));
         assert_eq!(r.subgame().length(), 0);
-        let r = r.push(Action::Call(1));
+        let r = r.push(Action::Fold);
         assert_eq!(r.subgame().length(), 1);
     }
 
@@ -529,13 +529,22 @@ mod tests {
     #[test]
     fn alignment_check() {
         let obs = Observation::from(Street::Flop);
+        // 4 folds (UTG–BTN) + SB calls + BB checks → flop
         let act = vec![
-            Action::Call(1), //
+            Action::Fold,
+            Action::Fold,
+            Action::Fold,
+            Action::Fold,
+            Action::Call(1),
             Action::Check,
         ];
         assert!(Partial::from((Turn::Choice(0), obs, act)).aligned());
         assert!(
             Partial::from((Turn::Choice(0), Arrangement::from(Street::Flop)))
+                .push(Action::Fold)
+                .push(Action::Fold)
+                .push(Action::Fold)
+                .push(Action::Fold)
                 .push(Action::Call(1))
                 .push(Action::Check)
                 .aligned()
@@ -560,7 +569,14 @@ mod tests {
     fn board_by_street() {
         let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Rive)));
         assert_eq!(r.board().len(), 0);
-        let r = r.push(Action::Call(1)).push(Action::Check);
+        // 4 folds (UTG–BTN) + SB calls + BB checks → flop
+        let r = r
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Call(1))
+            .push(Action::Check);
         assert_eq!(r.board().len(), 3);
         let r = r.push(Action::Check).push(Action::Check);
         assert_eq!(r.board().len(), 4);
@@ -573,10 +589,14 @@ mod tests {
     #[test]
     fn truncate_to_street() {
         let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Flop)))
-            .push(Action::Call(1)) // P0 pref
-            .push(Action::Check) // P1 pref -> flop
-            .push(Action::Check) // P1 flop
-            .push(Action::Check); // P0 flop (no turn, obs is flop)
+            .push(Action::Fold)    // UTG
+            .push(Action::Fold)    // UTG+1
+            .push(Action::Fold)    // CO
+            .push(Action::Fold)    // BTN
+            .push(Action::Call(1)) // SB
+            .push(Action::Check)   // BB → flop
+            .push(Action::Check)   // SB flop
+            .push(Action::Check);  // BB flop (no turn, obs is flop)
         let t = r.truncate(Street::Pref);
         // sprout advances to flop since obs has flop cards
         assert!(r.head().street() == Street::Flop);
@@ -588,25 +608,36 @@ mod tests {
     #[test]
     fn decisions_per_street() {
         let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Flop)))
-            .push(Action::Call(1))
-            .push(Action::Check)
-            .push(Action::Check)
-            .push(Action::Check);
-        assert_eq!(r.decisions(Street::Pref).len(), 2);
+            .push(Action::Fold)    // UTG
+            .push(Action::Fold)    // UTG+1
+            .push(Action::Fold)    // CO
+            .push(Action::Fold)    // BTN
+            .push(Action::Call(1)) // SB
+            .push(Action::Check)   // BB → flop
+            .push(Action::Check)   // SB flop
+            .push(Action::Check);  // BB flop
+        assert_eq!(r.decisions(Street::Pref).len(), 6);
         assert_eq!(r.decisions(Street::Flop).len(), 2);
         assert!(r.decisions(Street::Pref).iter().all(|a| a.is_choice()));
         assert!(r.decisions(Street::Flop).iter().all(|a| a.is_choice()));
     }
 
-    /// walk through all streets: P0 first preflop, P1 first postflop
+    /// walk through all streets: UTG (pos 3) acts first preflop, SB (pos 1) first postflop
     #[test]
     fn playability_all_streets() {
         let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Rive)));
-        assert_eq!(r.head().turn(), Turn::Choice(0));
+        assert_eq!(r.head().turn(), Turn::Choice(3)); // UTG acts first preflop
         assert_eq!(r.head().street(), Street::Pref);
-        let r = r.push(Action::Call(1)).push(Action::Check);
+        // 4 folds (UTG–BTN) + SB calls + BB checks → flop
+        let r = r
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Call(1))
+            .push(Action::Check);
         assert_eq!(r.head().street(), Street::Flop);
-        assert_eq!(r.head().turn(), Turn::Choice(1));
+        assert_eq!(r.head().turn(), Turn::Choice(1)); // SB acts first postflop
         let r = r.push(Action::Check).push(Action::Check);
         assert_eq!(r.head().street(), Street::Turn);
         assert_eq!(r.head().turn(), Turn::Choice(1));
@@ -616,12 +647,12 @@ mod tests {
         assert!(r.aligned());
     }
 
-    /// when not hero's turn, head().turn() != pov
+    /// when not hero's turn (pov=BTN=P0), head().turn() is UTG+1 after UTG folds
     #[test]
     fn playability_not_our_turn() {
         let r =
-            Partial::from((Turn::Choice(0), Arrangement::from(Street::Pref))).push(Action::Call(1));
-        assert_eq!(r.head().turn(), Turn::Choice(1));
+            Partial::from((Turn::Choice(0), Arrangement::from(Street::Pref))).push(Action::Fold);
+        assert_eq!(r.head().turn(), Turn::Choice(4)); // UTG+1 acts after UTG folds
     }
 
     /// from Arrangement starts with empty actions (blinds in root)
@@ -638,7 +669,7 @@ mod tests {
     fn from_tuple_stores_actions() {
         let obs = Observation::from(Street::Pref);
         let act = vec![
-            Action::Call(1), //
+            Action::Fold, // UTG folds
         ];
         let r = Partial::from((Turn::Choice(0), obs, act.clone()));
         assert_eq!(r.actions().len(), act.len());
@@ -650,8 +681,13 @@ mod tests {
     #[test]
     fn replace_swaps_arrangement() {
         let obs = Observation::from(Street::Flop);
+        // 4 folds (UTG–BTN) + SB calls + BB checks → flop
         let act = vec![
-            Action::Call(1), //
+            Action::Fold,
+            Action::Fold,
+            Action::Fold,
+            Action::Fold,
+            Action::Call(1),
             Action::Check,
         ];
         let old = Partial::from((Turn::Choice(0), obs, act));
@@ -675,7 +711,7 @@ mod tests {
         assert!(Partial::initial(Turn::Choice(0)).empty());
         assert!(
             Partial::initial(Turn::Choice(0))
-                .push(Action::Call(1))
+                .push(Action::Fold)
                 .empty()
                 .not()
         );
@@ -712,13 +748,19 @@ mod tests {
         );
     }
 
-    /// can_play: hero's turn and at observation street
+    /// can_play: hero's turn (pov=BTN=P0) and at observation street
     #[test]
     fn can_play_conditions() {
         let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Pref)));
-        assert_eq!(r.can_play(), r.turn() == Turn::Choice(0)); // can_play iff pov matches head's turn
-        let s = r.push(Action::Call(1));
-        assert_eq!(s.can_play(), s.turn() == Turn::Choice(1)); // after P0 acts, it's P1's turn
+        assert!(!r.can_play()); // UTG (P3) acts first preflop, not BTN (P0)
+        // after UTG, UTG+1, CO fold → BTN's turn
+        let s = r
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Fold);
+        assert!(s.can_play()); // BTN's turn
+        let t = s.push(Action::Fold); // BTN folds → SB's turn
+        assert!(!t.can_play()); // no longer BTN's turn
     }
 
     /// can_undo: false at initial, true after push
@@ -726,14 +768,14 @@ mod tests {
     fn can_undo_conditions() {
         let r = Partial::initial(Turn::Choice(0));
         assert!(r.can_undo().not());
-        assert!(r.push(Action::Call(1)).can_undo());
+        assert!(r.push(Action::Fold).can_undo());
     }
 
     /// can_push: legal actions pass, illegal fail
     #[test]
     fn can_push_conditions() {
         let r = Partial::initial(Turn::Choice(0));
-        assert!(r.can_push(&Action::Call(1)));
+        assert!(r.can_push(&Action::Call(2))); // UTG must call 2 to match BB
         assert!(r.can_push(&Action::Check).not());
     }
 }

@@ -199,6 +199,11 @@ mod tests {
     #[test]
     fn consistent_edge_collection_flop() {
         let game = Game::root();
+        // 4 folds (UTG–BTN) + SB calls + BB checks → flop
+        let game = game.apply(Action::Fold);
+        let game = game.apply(Action::Fold);
+        let game = game.apply(Action::Fold);
+        let game = game.apply(Action::Fold);
         let game = game.apply(Action::Call(1));
         let game = game.apply(Action::Check);
         let flop = game.deck().deal(Street::Pref);
@@ -228,6 +233,11 @@ mod tests {
     #[test]
     fn consistent_edge_collection_turn() {
         let game = Game::root();
+        // 4 folds (UTG–BTN) + SB calls + BB checks → flop
+        let game = game.apply(Action::Fold);
+        let game = game.apply(Action::Fold);
+        let game = game.apply(Action::Fold);
+        let game = game.apply(Action::Fold);
         let game = game.apply(Action::Call(1));
         let game = game.apply(Action::Check);
         let flop = game.deck().deal(Street::Pref);
@@ -336,7 +346,12 @@ mod tests {
 
     #[test]
     fn from_path_filters_to_current_street() {
+        // 4 folds (UTG–BTN) + SB calls + BB checks → flop, then flop betting
         let recall = Partial::from((Turn::Choice(0), Arrangement::from(Street::Flop)))
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Fold)
             .push(Action::Call(1))
             .push(Action::Check)
             .push(Action::Raise(3))
@@ -357,7 +372,12 @@ mod tests {
     #[test]
     fn canonical_choices_from_edge_reconstruction() {
         // Build a recall with arbitrary (potentially off-grid) actions
+        // 4 folds (UTG–BTN) + SB calls + BB checks → flop, then SB raises arbitrarily
         let recall = Partial::from((Turn::Choice(0), Arrangement::from(Street::Flop)))
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Fold)
+            .push(Action::Fold)
             .push(Action::Call(1))
             .push(Action::Check)
             .push(Action::Raise(7)); // arbitrary amount

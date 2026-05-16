@@ -23,7 +23,7 @@ use std::ops::Not;
 /// - `pot` — Total chips in the center (including current street bets)
 /// - `board` — Community cards (0–5 depending on street)
 /// - `seats` — Per-player state (stack, stake, status, hole cards)
-/// - `dealer` — Button position (0 or 1 for heads-up)
+/// - `dealer` — Button position (0–N-1)
 /// - `ticker` — Action counter for determining whose turn it is
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Game {
@@ -45,7 +45,7 @@ impl Default for Game {
                 .map(|h| (h, STACK))
                 .map(Seat::from),
             dealer: 0usize,
-            ticker: 0usize,
+            ticker: 1usize,
         }
     }
 }
@@ -317,7 +317,7 @@ impl Game {
         debug_assert!(self.street() == Street::Pref);
         self.dealer = self.dealer + 1;
         self.dealer = self.dealer % self.n();
-        self.ticker = 0;
+        self.ticker = 1;
     }
 }
 
@@ -418,8 +418,9 @@ impl Game {
         self.is_everyone_touched() && self.is_everyone_matched()
     }
     /// All players have acted at least once this street.
+    /// Preflop bonus is 2 because ticker initializes at 1 (ring game: BTN ≠ SB).
     fn is_everyone_touched(&self) -> bool {
-        self.ticker > self.n() + if self.street() == Street::Pref { 1 } else { 0 }
+        self.ticker > self.n() + if self.street() == Street::Pref { 2 } else { 0 }
     }
     /// All betting players are in for the effective stake.
     fn is_everyone_matched(&self) -> bool {
@@ -477,7 +478,8 @@ impl Game {
     /// Blind amount to post (SB or BB depending on position).
     pub fn to_post(&self) -> Chips {
         debug_assert!(self.street() == Street::Pref);
-        if self.actor_idx() == self.dealer {
+        let sb_pos = (self.dealer + 1) % self.n();
+        if self.actor_idx() == sb_pos {
             Self::sblind().min(self.actor_ref().stack())
         } else {
             Self::bblind().min(self.actor_ref().stack())
@@ -863,466 +865,466 @@ impl Game {
 mod tests {
     use super::*;
 
-    /// dealer posts SB, non-dealer posts BB, dealer acts first after blinds
+    /// fold all active players until the hand is terminal
+    fn fold_to_terminal(mut game: Game) -> Game {
+        while !game.must_stop() {
+            game = game.apply(Action::Fold);
+        }
+        game
+    }
+
+    /// advance to the next hand by folding everyone in the current hand
+    fn next_hand(game: Game) -> Option<Game> {
+        fold_to_terminal(game).continuation()
+    }
+
+    /// reach flop with only SB and BB by folding UTG through BTN (4 folds)
+    fn heads_to_flop(mut game: Game) -> Game {
+        for _ in 0..4 {
+            game = game.apply(Action::Fold);
+        }
+        game = game.apply(Action::Call(1)); // SB calls
+        game = game.apply(Action::Check);   // BB checks
+        let flop = game.deck().deal(Street::Pref);
+        game.apply(Action::Draw(flop))
+    }
+
+    /// UTG(dealer+3) acts first preflop in 6-max
     #[test]
     fn test_root() {
         let game = Game::root();
         assert_eq!(game.board().street(), Street::Pref);
         assert_eq!(game.actor().state(), State::Betting);
         assert_eq!(game.pot(), Game::sblind() + Game::bblind());
-        assert_eq!(game.turn(), Turn::Choice(game.dealer)); // dealer acts first
+        // UTG = (dealer+3)%N acts first preflop
+        assert_eq!(game.turn(), Turn::Choice((game.dealer + 3) % game.n()));
     }
 
     #[test]
     fn everyone_folds_pref() {
-        let game = Game::root();
-        let game = game.apply(Action::Fold);
-        assert!(game.is_everyone_folding() == true);
-        assert!(game.is_everyone_alright() == true);
-        assert!(game.is_everyone_calling() == false);
-        assert!(game.must_deal() == true); // ambiguous
-        assert!(game.must_stop() == true);
+        // need 5 folds (UTG through SB) for only BB to remain
+        let game = fold_to_terminal(Game::root());
+        assert!(game.is_everyone_folding());
+        assert!(game.is_everyone_alright());
+        assert!(!game.is_everyone_calling());
+        assert!(game.must_deal()); // ambiguous
+        assert!(game.must_stop());
     }
 
     #[test]
     fn everyone_folds_flop() {
-        let game = Game::root();
-        let flop = game.deck().deal(Street::Pref);
-        let game = game.apply(Action::Call(1));
-        let game = game.apply(Action::Check);
-        let game = game.apply(Action::Draw(flop));
-        let game = game.apply(Action::Raise(10));
-        let game = game.apply(Action::Fold);
-        assert!(game.is_everyone_folding() == true);
-        assert!(game.is_everyone_alright() == true);
-        assert!(game.is_everyone_calling() == false);
-        assert!(game.must_deal() == true); // ambiguous
-        assert!(game.must_stop() == true);
+        // reach flop with SB+BB only, then SB raises and BB folds
+        let game = heads_to_flop(Game::root());
+        let raise = game.to_raise();
+        let game = game.apply(Action::Raise(raise)); // SB raises
+        let game = game.apply(Action::Fold);          // BB folds
+        assert!(game.is_everyone_folding());
+        assert!(game.is_everyone_alright());
+        assert!(!game.is_everyone_calling());
+        assert!(game.must_deal()); // ambiguous
+        assert!(game.must_stop());
     }
 
+    /// 6-max: 4 fold preflop leaving SB+BB; check-check through all streets
     #[test]
     fn history_of_checks() {
-        // Blinds
+        // After root: pot=3, UTG(3) to act
         let game = Game::root();
         assert!(game.board().street() == Street::Pref);
         assert!(game.pot() == 3);
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == false);
-        assert!(game.is_everyone_alright() == false);
-        assert!(game.is_everyone_calling() == false);
-        assert!(game.is_everyone_touched() == false);
-        assert!(game.is_everyone_matched() == false);
+        assert!(!game.must_post());
+        assert!(!game.must_stop());
+        assert!(!game.must_deal());
+        assert!(!game.is_everyone_alright());
+        assert!(!game.is_everyone_calling());
+        assert!(!game.is_everyone_touched());
+        assert!(!game.is_everyone_matched()); // stakes unmatched: UTG stake=0, BB stake=2
 
-        // SmallB Preflop
+        // UTG folds
+        let game = game.apply(Action::Fold);
+        assert!(!game.is_everyone_touched());
+        assert!(!game.is_everyone_matched()); // UTG+1 still hasn't matched
+
+        // UTG+1, CO, BTN fold (3 more)
+        let game = game.apply(Action::Fold).apply(Action::Fold).apply(Action::Fold);
+        // now SB(1) is to act
+        assert_eq!(game.turn(), Turn::Choice(1));
+        assert!(!game.is_everyone_touched());
+
+        // SB calls 1 (pot=4)
         let game = game.apply(Action::Call(1));
         assert!(game.board().street() == Street::Pref);
-        assert!(game.pot() == 4); //
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == false);
-        assert!(game.is_everyone_alright() == false);
-        assert!(game.is_everyone_calling() == false);
-        assert!(game.is_everyone_touched() == false);
-        assert!(game.is_everyone_matched() == true); //
+        assert!(game.pot() == 4);
+        assert!(!game.must_stop());
+        assert!(!game.must_deal());
+        assert!(!game.is_everyone_alright());
+        assert!(!game.is_everyone_touched());
+        assert!(game.is_everyone_matched()); // SB and BB both at stake=2
 
-        // Dealer Preflop
+        // BB checks (pot=4) — everyone touched, must deal
         let game = game.apply(Action::Check);
         assert!(game.board().street() == Street::Pref);
         assert!(game.pot() == 4);
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == true); //
-        assert!(game.is_everyone_alright() == true); //
-        assert!(game.is_everyone_calling() == true); //
-        assert!(game.is_everyone_touched() == true); //
-        assert!(game.is_everyone_matched() == true);
+        assert!(!game.must_stop());
+        assert!(game.must_deal());
+        assert!(game.is_everyone_alright());
+        assert!(game.is_everyone_calling());
+        assert!(game.is_everyone_touched());
+        assert!(game.is_everyone_matched());
 
         // Flop
         let flop = game.deck().deal(game.board().street());
         let game = game.apply(Action::Draw(flop));
-        assert!(game.board().street() == Street::Flop); //
+        assert!(game.board().street() == Street::Flop);
         assert!(game.pot() == 4);
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == false); //
-        assert!(game.is_everyone_alright() == false); //
-        assert!(game.is_everyone_calling() == false); //
-        assert!(game.is_everyone_touched() == false); //
-        assert!(game.is_everyone_matched() == true);
+        assert!(!game.must_stop());
+        assert!(!game.must_deal());
+        assert!(!game.is_everyone_alright());
+        assert!(!game.is_everyone_calling());
+        assert!(!game.is_everyone_touched());
+        assert!(game.is_everyone_matched()); // stakes reset to 0
 
-        // SmallB Flop
+        // SB checks
+        let game = game.apply(Action::Check);
+        assert!(!game.must_deal());
+        assert!(!game.is_everyone_touched());
+        assert!(game.is_everyone_matched());
+
+        // BB checks — must deal
         let game = game.apply(Action::Check);
         assert!(game.board().street() == Street::Flop);
         assert!(game.pot() == 4);
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == false);
-        assert!(game.is_everyone_alright() == false);
-        assert!(game.is_everyone_calling() == false);
-        assert!(game.is_everyone_touched() == false);
-        assert!(game.is_everyone_matched() == true);
-
-        // Dealer Flop
-        let game = game.apply(Action::Check);
-        assert!(game.board().street() == Street::Flop);
-        assert!(game.pot() == 4);
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == true); //
-        assert!(game.is_everyone_alright() == true); //
-        assert!(game.is_everyone_calling() == true); //
-        assert!(game.is_everyone_touched() == true); //
-        assert!(game.is_everyone_matched() == true);
+        assert!(!game.must_stop());
+        assert!(game.must_deal());
+        assert!(game.is_everyone_alright());
+        assert!(game.is_everyone_calling());
+        assert!(game.is_everyone_touched());
 
         // Turn
         let turn = game.deck().deal(game.board().street());
         let game = game.apply(Action::Draw(turn));
         assert!(game.board().street() == Street::Turn);
-        assert!(game.pot() == 4);
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == false); //
-        assert!(game.is_everyone_alright() == false); //
-        assert!(game.is_everyone_calling() == false); //
-        assert!(game.is_everyone_touched() == false); //
-        assert!(game.is_everyone_matched() == true);
+        assert!(!game.is_everyone_touched());
 
-        // SmallB Turn
+        // SB checks
         let game = game.apply(Action::Check);
-        assert!(game.board().street() == Street::Turn);
-        assert!(game.pot() == 4);
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == false);
-        assert!(game.is_everyone_alright() == false);
-        assert!(game.is_everyone_calling() == false);
-        assert!(game.is_everyone_touched() == false);
-        assert!(game.is_everyone_matched() == true);
+        assert!(!game.is_everyone_touched());
 
-        // Dealer Turn
-        let game = game.apply(Action::Raise(4));
+        // BB raises (re-opens betting)
+        let raise = game.to_raise();
+        let game = game.apply(Action::Raise(raise));
         assert!(game.board().street() == Street::Turn);
-        assert!(game.pot() == 8);
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == false);
-        assert!(game.is_everyone_alright() == false);
-        assert!(game.is_everyone_calling() == false);
-        assert!(game.is_everyone_touched() == true); //
-        assert!(game.is_everyone_matched() == false); //
+        assert!(!game.must_stop());
+        assert!(!game.must_deal());
+        assert!(!game.is_everyone_alright());
+        assert!(!game.is_everyone_calling());
+        assert!(game.is_everyone_touched()); // acted once
+        assert!(!game.is_everyone_matched()); // BB hasn't matched
 
-        // SmallB Turn
-        let game = game.apply(Action::Call(4));
+        // BB calls
+        let to_call = game.to_call();
+        let game = game.apply(Action::Call(to_call));
         assert!(game.board().street() == Street::Turn);
-        assert!(game.pot() == 12); //
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == true); //
-        assert!(game.is_everyone_alright() == true); //
-        assert!(game.is_everyone_calling() == true); //
-        assert!(game.is_everyone_touched() == true);
-        assert!(game.is_everyone_matched() == true);
+        assert!(!game.must_stop());
+        assert!(game.must_deal());
+        assert!(game.is_everyone_alright());
+        assert!(game.is_everyone_calling());
+        assert!(game.is_everyone_touched());
+        assert!(game.is_everyone_matched());
 
         // River
         let rive = game.deck().deal(game.board().street());
         let game = game.apply(Action::Draw(rive));
-        assert!(game.board().street() == Street::Rive); //
-        assert!(game.pot() == 12);
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == false); //
-        assert!(game.is_everyone_alright() == false); //
-        assert!(game.is_everyone_calling() == false); //
-        assert!(game.is_everyone_touched() == false); //
-        assert!(game.is_everyone_matched() == true); //
+        assert!(game.board().street() == Street::Rive);
+        assert!(!game.must_stop());
+        assert!(!game.must_deal());
+        assert!(!game.is_everyone_alright());
+        assert!(!game.is_everyone_touched());
+        assert!(game.is_everyone_matched());
 
-        // SmallB River
+        // SB checks
+        let game = game.apply(Action::Check);
+        assert!(!game.is_everyone_touched());
+
+        // BB checks — terminal
         let game = game.apply(Action::Check);
         assert!(game.board().street() == Street::Rive);
-        assert!(game.pot() == 12);
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == false);
-        assert!(game.must_deal() == false);
-        assert!(game.is_everyone_alright() == false);
-        assert!(game.is_everyone_calling() == false);
-        assert!(game.is_everyone_touched() == false);
-        assert!(game.is_everyone_matched() == true);
-
-        // Dealer River
-        let game = game.apply(Action::Check);
-        assert!(game.board().street() == Street::Rive);
-        assert!(game.pot() == 12);
-        assert!(game.must_post() == false);
-        assert!(game.must_stop() == true); //
-        assert!(game.must_deal() == false);
-        assert!(game.is_everyone_alright() == true); //
-        assert!(game.is_everyone_calling() == true); //
-        assert!(game.is_everyone_touched() == true); //
-        assert!(game.is_everyone_matched() == true); //
+        assert!(game.must_stop());
+        assert!(!game.must_deal());
+        assert!(game.is_everyone_alright());
+        assert!(game.is_everyone_calling());
+        assert!(game.is_everyone_touched());
+        assert!(game.is_everyone_matched());
     }
 
     /// next() resets game state correctly after terminal
     #[test]
     fn next_after_fold() {
-        let game = Game::root().apply(Action::Fold);
+        let game = fold_to_terminal(Game::root());
         assert!(game.must_stop());
         let next = game.continuation().expect("can continue");
         assert_eq!(next.street(), Street::Pref);
         assert_eq!(next.pot(), Game::sblind() + Game::bblind());
         assert_eq!(next.board(), Board::empty());
         assert_eq!(next.dealer, 1); // rotated from 0
-        assert_eq!(next.turn(), Turn::Choice(1)); // new dealer acts first
+        // UTG with dealer=1 is at (1+3)%6=4
+        assert_eq!(next.turn(), Turn::Choice(4));
         assert!(!next.is_everyone_touched());
     }
 
-    /// dealer rotates correctly across multiple hands
+    /// dealer rotates correctly across multiple hands, wrapping at N=6
     #[test]
     fn dealer_rotation() {
         let game = Game::root();
         assert_eq!(game.dealer, 0);
-        let game = game.apply(Action::Fold).continuation().unwrap();
+        let game = next_hand(game).unwrap();
         assert_eq!(game.dealer, 1);
-        let game = game.apply(Action::Fold).continuation().unwrap();
-        assert_eq!(game.dealer, 0); // wraps around
-        let game = game.apply(Action::Fold).continuation().unwrap();
-        assert_eq!(game.dealer, 1);
+        let game = next_hand(game).unwrap();
+        assert_eq!(game.dealer, 2);
+        // after 6 full rotations, wraps back to 0
+        let mut game = Game::root();
+        for _ in 0..6 {
+            game = next_hand(game).unwrap();
+        }
+        assert_eq!(game.dealer, 0);
     }
 
-    /// ticker resets correctly for each new hand, regardless of dealer
+    /// ticker resets correctly for each new hand (initial ticker=1, 2 blinds → ticker=3)
     #[test]
     fn ticker_reset_on_next() {
         let g0 = Game::root();
-        let g1 = g0.apply(Action::Fold).continuation().unwrap();
-        let g2 = g1.apply(Action::Fold).continuation().unwrap();
-        // both should have same ticker after blinds, despite different dealers
+        let g1 = next_hand(g0).unwrap();
+        let g2 = next_hand(g1).unwrap();
         assert_eq!(g0.ticker, g1.ticker);
         assert_eq!(g1.ticker, g2.ticker);
-        assert_eq!(g0.ticker, 2); // 2 blinds posted
+        assert_eq!(g0.ticker, 3); // initial=1, SB post→2, BB post→3
     }
 
-    /// is_everyone_touched works correctly for dealer=1
+    /// is_everyone_touched works for dealer=1 (6-max rotation)
     #[test]
     fn touched_with_rotated_dealer() {
-        let game = Game::root().apply(Action::Fold).continuation().unwrap();
+        let game = next_hand(Game::root()).unwrap();
         assert_eq!(game.dealer, 1);
-        assert!(!game.is_everyone_touched()); // just blinds
-        let game = game.apply(Action::Call(1));
-        assert!(!game.is_everyone_touched()); // P1 called, P0 hasn't acted
-        let game = game.apply(Action::Check);
-        assert!(game.is_everyone_touched()); // both acted
+        assert!(!game.is_everyone_touched());
+        // With dealer=1: UTG=(1+3)%6=4. Fold 4 players, SB calls, BB checks.
+        let mut game = game;
+        for _ in 0..4 {
+            game = game.apply(Action::Fold);
+        }
+        assert!(!game.is_everyone_touched());
+        let game = game.apply(Action::Call(1)); // SB=(1+1)%6=2 calls
+        assert!(!game.is_everyone_touched());
+        let game = game.apply(Action::Check); // BB=(1+2)%6=3 checks
+        assert!(game.is_everyone_touched());
         assert!(game.must_deal());
     }
 
     /// multi-street hand with rotated dealer
     #[test]
     fn full_hand_rotated_dealer() {
-        let game = Game::root().apply(Action::Fold).continuation().unwrap();
+        let game = next_hand(Game::root()).unwrap();
         assert_eq!(game.dealer, 1);
-        // preflop: P1 (dealer) calls, P0 checks
+        // fold 4 (UTG=4, UTG+1=5, CO=0, BTN=1), SB=2 calls, BB=3 checks
+        let mut game = game;
+        for _ in 0..4 {
+            game = game.apply(Action::Fold);
+        }
         let game = game.apply(Action::Call(1)).apply(Action::Check);
         assert!(game.must_deal());
-        // flop
         let flop = game.deck().deal(Street::Pref);
         let game = game.apply(Action::Draw(flop));
         assert_eq!(game.street(), Street::Flop);
-        assert_eq!(game.turn(), Turn::Choice(0)); // non-dealer first postflop
+        // SB=(1+1)%6=2 acts first postflop
+        assert_eq!(game.turn(), Turn::Choice(2));
         assert!(!game.is_everyone_touched());
-        // P0 checks, P1 checks
         let game = game.apply(Action::Check).apply(Action::Check);
         assert!(game.is_everyone_touched());
         assert!(game.must_deal());
     }
 
-    /// five consecutive hands, verifying state after each
+    /// six consecutive hands cycle dealer through all positions
     #[test]
     fn five_hands_sequence() {
         let mut game = Game::root();
-        for i in 0..5 {
-            assert_eq!(game.dealer, i % 2);
+        for i in 0..6 {
+            assert_eq!(game.dealer, i % 6);
             assert_eq!(game.pot(), Game::sblind() + Game::bblind());
             assert_eq!(game.street(), Street::Pref);
             assert!(!game.is_everyone_touched());
-            assert_eq!(game.turn(), Turn::Choice(game.dealer));
-            game = game.apply(Action::Fold).continuation().unwrap();
+            // UTG = (dealer+3)%6 acts first
+            assert_eq!(game.turn(), Turn::Choice((game.dealer + 3) % game.n()));
+            game = next_hand(game).unwrap();
         }
     }
 
-    /// call-check sequence works identically for both dealer positions
+    /// preflop action order: UTG first, then postflop SB first
     #[test]
     fn symmetric_preflop_action() {
-        // dealer=0: P0 calls, P1 checks
+        // dealer=0: UTG(3) first preflop; after 4 folds, SB(1) and BB(2) reach flop
         let g0 = Game::root();
         assert_eq!(g0.dealer, 0);
-        let g0 = g0.apply(Action::Call(1));
-        assert!(!g0.is_everyone_touched());
-        let g0 = g0.apply(Action::Check);
-        assert!(g0.is_everyone_touched());
-        assert!(g0.must_deal());
-        // dealer=1: P1 calls, P0 checks
-        let g1 = Game::root().apply(Action::Fold).continuation().unwrap();
-        assert_eq!(g1.dealer, 1);
-        let g1 = g1.apply(Action::Call(1));
-        assert!(!g1.is_everyone_touched());
-        let g1 = g1.apply(Action::Check);
-        assert!(g1.is_everyone_touched());
-        assert!(g1.must_deal());
-    }
+        assert_eq!(g0.turn(), Turn::Choice(3)); // UTG first
+        let g0 = heads_to_flop(g0);
+        // SB(1) acts first on flop
+        assert_eq!(g0.turn(), Turn::Choice(1));
 
-    /// actor position is correct for both dealers on flop
-    #[test]
-    fn flop_actor_both_dealers() {
-        // dealer=0: non-dealer (P1) acts first on flop
-        let g0 = Game::root().apply(Action::Call(1)).apply(Action::Check);
-        let flop = g0.deck().deal(Street::Pref);
-        let g0 = g0.apply(Action::Draw(flop));
-        assert_eq!(g0.turn(), Turn::Choice(1)); // P1 (non-dealer) first
-        // dealer=1: non-dealer (P0) acts first on flop
-        let g1 = Game::root()
-            .apply(Action::Fold)
-            .continuation()
-            .unwrap()
-            .apply(Action::Call(1))
-            .apply(Action::Check);
+        // dealer=1: UTG(4) first preflop; SB(2) acts first postflop
+        let mut g1 = next_hand(Game::root()).unwrap();
+        assert_eq!(g1.dealer, 1);
+        assert_eq!(g1.turn(), Turn::Choice(4)); // UTG=(1+3)%6=4
+        for _ in 0..4 {
+            g1 = g1.apply(Action::Fold);
+        }
+        let g1 = g1.apply(Action::Call(1)).apply(Action::Check);
         let flop = g1.deck().deal(Street::Pref);
         let g1 = g1.apply(Action::Draw(flop));
-        assert_eq!(g1.turn(), Turn::Choice(0)); // P0 (non-dealer) first
+        assert_eq!(g1.turn(), Turn::Choice(2)); // SB=(1+1)%6=2
     }
 
-    /// shove and call leads to showdown
+    /// SB acts first on flop for any dealer position
+    #[test]
+    fn flop_actor_both_dealers() {
+        // dealer=0: SB=1 acts first on flop
+        let g0 = heads_to_flop(Game::root());
+        assert_eq!(g0.turn(), Turn::Choice(1));
+
+        // dealer=1: SB=2 acts first on flop
+        let mut g1 = next_hand(Game::root()).unwrap();
+        assert_eq!(g1.dealer, 1);
+        for _ in 0..4 {
+            g1 = g1.apply(Action::Fold);
+        }
+        let g1 = g1.apply(Action::Call(1)).apply(Action::Check);
+        let flop = g1.deck().deal(Street::Pref);
+        let g1 = g1.apply(Action::Draw(flop));
+        assert_eq!(g1.turn(), Turn::Choice(2));
+    }
+
+    /// all six players shove leads to all-in showdown
     #[test]
     fn allin_showdown() {
-        let game = Game::root();
-        let shove = game.to_shove(); // dealer's stack = 99
-        let game = game.apply(Action::Shove(shove));
-        // BB's to_call (98) == to_shove (98), so must use Shove not Call
-        let shove = game.to_shove();
-        let game = game.apply(Action::Shove(shove));
+        let mut game = Game::root();
+        while !game.must_stop() && !game.must_deal() {
+            let shove = game.to_shove();
+            game = game.apply(Action::Shove(shove));
+        }
         assert!(game.is_everyone_shoving());
         assert!(game.must_stop() || game.must_deal());
     }
 
-    /// shove and fold is terminal
+    /// UTG shoves then everyone folds — only UTG remains (shoving counts as not-folded)
     #[test]
     fn allin_fold() {
-        let game = Game::root();
-        let shove = game.to_shove();
-        let game = game.apply(Action::Shove(shove)).apply(Action::Fold);
+        let mut game = Game::root();
+        let shove = game.to_shove(); // UTG shoves
+        game = game.apply(Action::Shove(shove));
+        while !game.must_stop() {
+            game = game.apply(Action::Fold);
+        }
         assert!(game.must_stop());
-        assert!(game.is_everyone_folding());
+        assert!(game.is_everyone_folding()); // only UTG (Shoving) remains → count=1
     }
 
-    /// raise-reraise sequence keeps action open
+    /// raise-reraise keeps action open, next actor is CO(5)
     #[test]
     fn raise_reraise() {
-        let g0 = Game::root();
+        let g0 = Game::root(); // UTG(3) acts
         let r1 = g0.to_raise();
-        let g1 = g0.apply(Action::Raise(r1));
+        let g1 = g0.apply(Action::Raise(r1)); // UTG raises → UTG+1(4) acts
         let r2 = g1.to_raise();
-        let g2 = g1.apply(Action::Raise(r2));
-        assert!(!g2.must_deal()); // betting not closed
-        assert!(!g2.is_everyone_alright()); // stakes unmatched
-        assert_eq!(g2.turn(), Turn::Choice(0)); // back to dealer
-        assert!(g2.may_raise() || g2.may_call()); // can continue
+        let g2 = g1.apply(Action::Raise(r2)); // UTG+1 re-raises → CO(5) acts
+        assert!(!g2.must_deal());
+        assert!(!g2.is_everyone_alright());
+        assert_eq!(g2.turn(), Turn::Choice(5)); // CO is next
+        assert!(g2.may_raise() || g2.may_call());
     }
 
-    /// stacks update correctly after fold (before new blinds)
+    /// BB wins pot when all others fold preflop
     #[test]
     fn stacks_after_fold() {
-        let game = Game::root().apply(Action::Fold);
+        let game = fold_to_terminal(Game::root());
         assert!(game.must_stop());
-        // check settlements before next hand
         let settlements = game.settlements();
-        // reward() is total received, won() is net (reward - risked)
-        assert_eq!(settlements[0].pnl().reward(), 0); // dealer folded
-        assert_eq!(settlements[1].pnl().reward(), 3); // BB wins pot
-        assert_eq!(settlements[0].won(), -1); // lost SB
-        assert_eq!(settlements[1].won(), 1); // net gain
+        // BB (pos 2) wins pot=3
+        assert_eq!(settlements[2].pnl().reward(), 3);
+        assert_eq!(settlements[2].won(), 1);   // BB net +1
+        assert_eq!(settlements[1].won(), -1);  // SB lost blind
+        assert_eq!(settlements[0].won(), 0);   // BTN nothing at risk
+        assert_eq!(settlements[3].won(), 0);   // UTG nothing at risk
     }
 
-    /// stacks update correctly after flop fold
+    /// SB wins after raising on flop and BB folds
     #[test]
     fn stacks_after_flop_bet_fold() {
-        let game = Game::root().apply(Action::Call(1)).apply(Action::Check);
-        let flop = game.deck().deal(Street::Pref);
-        let game = game.apply(Action::Draw(flop));
-        // P1 (non-dealer) acts first, raises
-        let raise = game.to_raise();
-        let game = game.apply(Action::Raise(raise));
-        // P0 folds
-        let game = game.apply(Action::Fold);
+        let game = heads_to_flop(Game::root()); // pot=4, SB+BB on flop
+        let raise = game.to_raise(); // SB raises (min=2 on empty flop)
+        let game = game.apply(Action::Raise(raise)); // SB raises
+        let game = game.apply(Action::Fold);          // BB folds
         assert!(game.must_stop());
         let settlements = game.settlements();
-        // pot is 4 + raise, P1 wins it all
-        assert_eq!(settlements[0].pnl().reward(), 0); // dealer folded
-        assert!(settlements[1].pnl().reward() > 0); // BB wins pot
-        assert_eq!(settlements[0].won(), -2); // lost 2
+        // SB(1): spent=1+1+2=4, wins pot=4+2=6, won=2
+        assert_eq!(settlements[1].won(), 2);
+        // BB(2): spent=2, wins=0, won=-2
+        assert_eq!(settlements[2].won(), -2);
+        // BTN(0): no chips risked
+        assert_eq!(settlements[0].won(), 0);
     }
 
-    /// multi-hand with betting, not just folds
+    /// dealer rotates correctly across hands with non-trivial preflop
     #[test]
     fn multi_hand_with_betting() {
-        let g0 = Game::root();
-        // hand 1: call-check, bet-fold on flop
-        let g0 = g0.apply(Action::Call(1)).apply(Action::Check);
-        let flop = g0.deck().deal(Street::Pref);
-        let g0 = g0.apply(Action::Draw(flop));
-        let raise = g0.to_raise();
-        let g0 = g0.apply(Action::Raise(raise)).apply(Action::Fold);
+        let g0 = fold_to_terminal(Game::root());
         let g1 = g0.continuation().unwrap();
         assert_eq!(g1.dealer, 1);
-        // hand 2: raise-call, bet-fold on flop
-        let r1 = g1.to_raise();
-        let g1 = g1.apply(Action::Raise(r1));
-        let c1 = g1.to_call();
-        let g1 = g1.apply(Action::Call(c1));
-        let flop = g1.deck().deal(Street::Pref);
-        let g1 = g1.apply(Action::Draw(flop));
-        let raise = g1.to_raise();
-        let g1 = g1.apply(Action::Raise(raise)).apply(Action::Fold);
+        assert_eq!(g1.pot(), Game::sblind() + Game::bblind());
+        let g1 = fold_to_terminal(g1);
         let g2 = g1.continuation().unwrap();
-        assert_eq!(g2.dealer, 0);
-        assert_eq!(g2.pot(), 3);
+        assert_eq!(g2.dealer, 2);
+        assert_eq!(g2.pot(), Game::sblind() + Game::bblind());
     }
 
-    /// legal() returns correct options preflop after blinds
+    /// UTG faces full BB amount, can fold/call/raise/shove
     #[test]
     fn legal_preflop_options() {
-        let game = Game::root();
+        let game = Game::root(); // UTG(3) acts; to_call=2 (UTG stake=0, BB stake=2)
         let legal = game.legal();
         assert!(legal.contains(&Action::Fold));
-        assert!(legal.contains(&Action::Call(1)));
+        assert!(legal.contains(&Action::Call(2))); // UTG calls full 2bb
         assert!(legal.iter().any(|a| matches!(a, Action::Raise(_))));
         assert!(legal.iter().any(|a| matches!(a, Action::Shove(_))));
-        assert!(!legal.contains(&Action::Check)); // can't check facing BB
+        assert!(!legal.contains(&Action::Check));
     }
 
-    /// legal() after limp allows check
+    /// BB can check after everyone limps (SB already covered)
     #[test]
     fn legal_bb_can_check() {
-        let game = Game::root().apply(Action::Call(1));
+        let mut game = Game::root();
+        for _ in 0..4 {
+            game = game.apply(Action::Fold);
+        } // UTG-BTN fold
+        game = game.apply(Action::Call(1)); // SB calls; now BB's turn
         let legal = game.legal();
         assert!(legal.contains(&Action::Check));
-        assert!(!legal.contains(&Action::Fold)); // no need to fold
+        assert!(!legal.contains(&Action::Fold));
     }
 
-    /// legal() on flop
+    /// SB acts first on flop; can check or raise, not fold
     #[test]
     fn legal_flop_options() {
-        let game = Game::root().apply(Action::Call(1)).apply(Action::Check);
-        let flop = game.deck().deal(Street::Pref);
-        let game = game.apply(Action::Draw(flop));
+        let game = heads_to_flop(Game::root());
         let legal = game.legal();
         assert!(legal.contains(&Action::Check));
         assert!(legal.iter().any(|a| matches!(a, Action::Raise(_))));
-        assert!(!legal.contains(&Action::Fold)); // no bet to fold to
+        assert!(!legal.contains(&Action::Fold));
     }
 
-    /// terminal via river showdown
+    /// check-check through all four streets reaches terminal river
     #[test]
     fn terminal_river_showdown() {
-        let mut game = Game::root().apply(Action::Call(1)).apply(Action::Check);
-        for street in [Street::Pref, Street::Flop, Street::Turn] {
+        let mut game = heads_to_flop(Game::root()); // already at flop
+        // flop: SB+BB check
+        game = game.apply(Action::Check).apply(Action::Check);
+        for street in [Street::Flop, Street::Turn] {
             let cards = game.deck().deal(street);
             game = game
                 .apply(Action::Draw(cards))
@@ -1334,82 +1336,70 @@ mod tests {
         assert!(!game.must_deal());
     }
 
-    /// ten consecutive hands alternate dealers correctly
+    /// twelve hands cycle dealer through two full rotations of 6
     #[test]
     fn ten_hands_alternation() {
         let mut game = Game::root();
-        for i in 0..10 {
-            assert_eq!(game.dealer, i % 2);
-            assert_eq!(game.turn(), Turn::Choice(game.dealer));
-            game = game.apply(Action::Fold).continuation().unwrap();
+        for i in 0..12 {
+            assert_eq!(game.dealer, i % 6);
+            assert_eq!(game.turn(), Turn::Choice((game.dealer + 3) % game.n()));
+            game = next_hand(game).unwrap();
         }
     }
 
-    /// min raise calculation
+    /// UTG min-raise: to_raise = relative(2) + required(max(1,2)) = 4
     #[test]
     fn min_raise_size() {
-        let game = Game::root();
-        // dealer stake=1, BB stake=2. to_raise = (2-1) + max(2-1, BB) = 1 + 2 = 3
-        assert_eq!(game.to_raise(), 3);
-        let game = game.apply(Action::Raise(3));
-        // dealer stake=4, BB stake=2. to_raise = (4-2) + max(4-2, BB) = 2 + 2 = 4
+        let game = Game::root(); // UTG: stake=0, BB=2, SB=1
+        // relative=2-0=2, marginal=2-1=1, required=max(1,2)=2, to_raise=4
         assert_eq!(game.to_raise(), 4);
+        let game = game.apply(Action::Raise(4)); // UTG raises to 4 → UTG+1 acts
+        // UTG+1: stake=0, UTG=4, BB=2. relative=4, marginal=4-2=2, required=2, to_raise=6
+        assert_eq!(game.to_raise(), 6);
     }
 
-    /// pot size tracks correctly through streets
+    /// pot increments correctly through call and raise sequences
     #[test]
     fn pot_tracking() {
-        let game = Game::root();
+        let game = Game::root(); // pot=3 (blinds)
         assert_eq!(game.pot(), 3);
-        let game = game.apply(Action::Call(1));
-        assert_eq!(game.pot(), 4);
-        let game = game.apply(Action::Raise(4));
-        assert_eq!(game.pot(), 8);
-        let game = game.apply(Action::Call(4));
-        assert_eq!(game.pot(), 12);
+        let game = game.apply(Action::Call(2)); // UTG calls 2
+        assert_eq!(game.pot(), 5);
+        let game = game.apply(Action::Raise(4)); // UTG+1 raises 4
+        assert_eq!(game.pot(), 9);
+        let game = game.apply(Action::Call(4)); // CO calls 4
+        assert_eq!(game.pot(), 13);
     }
 
-    /// cannot continue if player busts
+    /// all-in pot sums to total chips; losers can't cover bblind
     #[test]
     fn bust_prevents_next() {
-        // create game where one player will bust
-        let game = Game::root();
-        let shove = game.to_shove();
-        let game = game.apply(Action::Shove(shove));
-        // BB must shove (not call) since to_call == to_shove
-        let shove = game.to_shove();
-        let game = game.apply(Action::Shove(shove));
-        // run to showdown
-        let mut game = game;
-        while !game.must_stop() {
-            if game.must_deal() {
-                let cards = game.deck().deal(game.street());
-                game = game.apply(Action::Draw(cards));
-            }
+        let mut game = Game::root();
+        while !game.must_stop() && !game.must_deal() {
+            let shove = game.to_shove();
+            game = game.apply(Action::Shove(shove));
         }
-        // total pot is 200 (100 from each), winner gets it all
-        let rewards: Vec<_> = game
-            .settlements()
-            .iter()
-            .map(|s| s.pnl().reward())
-            .collect();
-        assert!(rewards.contains(&0) && rewards.contains(&200));
+        assert!(game.is_everyone_shoving());
+        while !game.must_stop() {
+            let cards = game.deck().deal(game.street());
+            game = game.apply(Action::Draw(cards));
+        }
+        let rewards: Vec<i16> = game.settlements().iter().map(|s| s.pnl().reward()).collect();
+        assert_eq!(rewards.iter().sum::<i16>(), 600); // 6 × 100bb fully distributed
     }
 
-    /// actor_idx wraps correctly with ticker
+    /// actor_idx: dealer=0, ticker=3 → UTG(3); after UTG+1 fold → CO(5)
     #[test]
     fn actor_idx_wrapping() {
         let game = Game::root();
-        assert_eq!(game.actor_idx(), 0); // dealer, ticker=2, (0+2)%2=0
-        let game = game.apply(Action::Call(1));
-        assert_eq!(game.actor_idx(), 1); // ticker=3, (0+3)%2=1
-        let game = game.apply(Action::Check);
-        // must_deal is true, but if we peek at actor_idx...
-        assert_eq!((game.dealer + game.ticker) % game.n(), 0); // wraps
+        assert_eq!(game.actor_idx(), 3); // UTG: (0+3)%6=3
+        let game = game.apply(Action::Call(2)); // UTG calls → UTG+1(4)
+        assert_eq!(game.actor_idx(), 4);
+        let game = game.apply(Action::Fold); // UTG+1 folds → CO(5)
+        assert_eq!(game.actor_idx(), 5);
     }
 
     /// snap preserves legal actions unchanged
-    /// TODO: expand beyond only testing at the root node. apply some pot actions
     #[test]
     fn snap_legal_unchanged() {
         let game = Game::root();
@@ -1437,10 +1427,14 @@ mod tests {
         assert_eq!(game.snap(Action::Raise(0)), Action::Raise(minraise));
     }
 
-    /// snap coerces fold to check when not facing bet
+    /// snap coerces fold to check when not facing bet (BB's option)
     #[test]
     fn snap_fold_to_check_not_facing_bet() {
-        let game = Game::root().apply(Action::Call(1));
+        let mut game = Game::root();
+        for _ in 0..4 {
+            game = game.apply(Action::Fold);
+        }
+        game = game.apply(Action::Call(1)); // SB calls; now BB's turn
         assert!(!game.may_fold());
         assert!(game.may_check());
         assert_eq!(game.snap(Action::Fold), Action::Check);
@@ -1449,7 +1443,7 @@ mod tests {
     /// snap coerces check to call when facing bet
     #[test]
     fn snap_check_to_call_facing_bet() {
-        let game = Game::root();
+        let game = Game::root(); // UTG faces 2bb bet
         assert!(!game.may_check());
         assert!(game.may_call());
         assert_eq!(game.snap(Action::Check), game.calls());
