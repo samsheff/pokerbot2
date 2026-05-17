@@ -54,3 +54,11 @@ pub struct GetPolicy {
     pub seen: String,
     pub past: Vec<String>,
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct DecideRequest {
+    pub hole: Vec<String>,
+    pub board: Vec<String>,
+    pub actions: Vec<String>,
+    pub pov: usize,
+}

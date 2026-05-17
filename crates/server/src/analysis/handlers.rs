@@ -2,9 +2,15 @@ use super::API;
 use rbp_cards::*;
 use rbp_core::*;
 use rbp_gameplay::*;
+use rbp_mccfr::Profile;
+use rbp_mccfr::Solver;
+use rbp_nlhe::*;
+use rbp_transport::Density;
 use actix_web::HttpResponse;
 use actix_web::Responder;
 use actix_web::web;
+use rand::prelude::*;
+use rand::distr::weighted::WeightedIndex;
 
 pub async fn replace_obs(api: web::Data<API>, req: web::Json<ReplaceObs>) -> impl Responder {
     match Observation::try_from(req.obs.as_str()) {
@@ -132,6 +138,47 @@ pub async fn hst_wrt_obs(api: web::Data<API>, req: web::Json<ObsHist>) -> impl R
         },
     }
 }
+pub async fn decide(
+    blueprint: web::Data<&'static Flagship>,
+    req: web::Json<DecideRequest>,
+) -> impl Responder {
+    let obs_str = format!("{} ~ {}", req.hole.join(" "), req.board.join(" "));
+    let seen = match Observation::try_from(obs_str.as_str()) {
+        Ok(o) => o,
+        Err(e) => return HttpResponse::BadRequest().body(format!("invalid cards: {}", e)),
+    };
+    let actions = match req
+        .actions
+        .iter()
+        .map(|s| Action::try_from(s.as_str()))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(a) => a,
+        Err(e) => return HttpResponse::BadRequest().body(format!("invalid action: {}", e)),
+    };
+    let partial = match Partial::try_build(Turn::from(req.pov), seen, actions) {
+        Ok(p) => p,
+        Err(e) => return HttpResponse::BadRequest().body(format!("invalid game state: {}", e)),
+    };
+    let game = partial.head();
+    let bp: &Flagship = &**blueprint;
+    let abstraction = bp.encoder().abstraction(&partial.seen());
+    let info = NlheInfo::from((&partial, abstraction));
+    let policy = bp.profile().averaged_distribution(&info);
+    let edges: Vec<_> = policy.support().collect();
+    let weights: Vec<f32> = edges.iter().map(|e| policy.density(e)).collect();
+    let action = WeightedIndex::new(&weights)
+        .ok()
+        .map(|dist| edges[dist.sample(&mut rand::rng())])
+        .map(|edge| game.actionize(Edge::from(edge)))
+        .unwrap_or_else(|| *game.legal().choose(&mut rand::rng()).unwrap());
+    let legal: Vec<String> = game.legal().iter().map(|a| a.to_string()).collect();
+    HttpResponse::Ok().json(serde_json::json!({
+        "action": action.to_string(),
+        "legal": legal,
+    }))
+}
+
 pub async fn blueprint(api: web::Data<API>, req: web::Json<GetPolicy>) -> impl Responder {
     let hero = Turn::try_from(req.turn.as_str());
     let seen = Observation::try_from(req.seen.as_str());

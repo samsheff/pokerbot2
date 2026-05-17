@@ -2,6 +2,7 @@ use super::*;
 use rbp_auth::Lurker;
 use rbp_core::ID;
 use rbp_gameroom::*;
+use rbp_nlhe::Flagship;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -16,13 +17,15 @@ type Rx = Arc<Mutex<UnboundedReceiver<String>>>;
 /// Manages active game rooms and their lifecycles.
 pub struct Casino {
     db: Arc<Client>,
+    blueprint: &'static Flagship,
     rooms: RwLock<HashMap<ID<Room>, RoomHandle>>,
 }
 
 impl Casino {
-    pub fn new(db: Arc<Client>) -> Self {
+    pub fn new(db: Arc<Client>, blueprint: &'static Flagship) -> Self {
         Self {
             db,
+            blueprint,
             rooms: RwLock::new(HashMap::new()),
         }
     }
@@ -38,7 +41,7 @@ impl Casino {
         self.db.create_room(&room).await?;
         self.rooms.write().await.insert(id, channels.handle);
         room.sit(channels.client, Lurker::default());
-        room.sit(Fish, Lurker::default());
+        room.sit(DatabasePlayer::new(self.blueprint), Lurker::default());
         tokio::spawn(room.run(channels.start, channels.done_tx));
         let casino = self.clone();
         tokio::spawn(async move {

@@ -25,6 +25,8 @@ use actix_web::HttpServer;
 use actix_web::Responder;
 use actix_web::middleware::Logger;
 use actix_web::web;
+use rbp_database::Hydrate;
+use rbp_nlhe::Flagship;
 use std::sync::Arc;
 use tokio_postgres::Client;
 
@@ -44,7 +46,10 @@ pub async fn run() -> Result<(), std::io::Error> {
     let client = rbp_database::db().await;
     let api = web::Data::new(analysis::API::new(client.clone()));
     let crypto = web::Data::new(rbp_auth::Crypto::from_env());
-    let casino = web::Data::new(hosting::Casino::new(client.clone()));
+    log::info!("loading blueprint for inference");
+    let blueprint: &'static Flagship = Box::leak(Box::new(Flagship::hydrate(client.clone()).await));
+    let casino = web::Data::new(hosting::Casino::new(client.clone(), blueprint));
+    let blueprint = web::Data::new(blueprint);
     let client = web::Data::new(client);
     log::info!("starting unified server");
     HttpServer::new(move || {
@@ -59,6 +64,7 @@ pub async fn run() -> Result<(), std::io::Error> {
             .app_data(api.clone())
             .app_data(casino.clone())
             .app_data(crypto.clone())
+            .app_data(blueprint.clone())
             .app_data(client.clone())
             .route("/health", web::get().to(health))
             .service(
@@ -88,7 +94,8 @@ pub async fn run() -> Result<(), std::io::Error> {
                     .route("/exp-wrt-obs", web::post().to(analysis::handlers::exp_wrt_obs))
                     .route("/hst-wrt-abs", web::post().to(analysis::handlers::hst_wrt_abs))
                     .route("/hst-wrt-obs", web::post().to(analysis::handlers::hst_wrt_obs))
-                    .route("/blueprint", web::post().to(analysis::handlers::blueprint)),
+                    .route("/blueprint", web::post().to(analysis::handlers::blueprint))
+                    .route("/decide", web::post().to(analysis::handlers::decide)),
             )
     })
     .workers(6)

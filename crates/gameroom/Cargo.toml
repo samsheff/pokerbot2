@@ -12,7 +12,7 @@ categories    = ["game-development", "asynchronous"]
 
 [features]
 default       = []
-database      = ["rbp-database", "tokio-postgres"]
+database      = ["rbp-database", "tokio-postgres", "rbp-nlhe/database"]
 cli           = ["dialoguer"]
 
 [dependencies]
