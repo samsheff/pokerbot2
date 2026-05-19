@@ -1,4 +1,9 @@
 use super::API;
+use actix_web::HttpResponse;
+use actix_web::Responder;
+use actix_web::web;
+use rand::distr::weighted::WeightedIndex;
+use rand::prelude::*;
 use rbp_cards::*;
 use rbp_core::*;
 use rbp_gameplay::*;
@@ -6,11 +11,6 @@ use rbp_mccfr::Profile;
 use rbp_mccfr::Solver;
 use rbp_nlhe::*;
 use rbp_transport::Density;
-use actix_web::HttpResponse;
-use actix_web::Responder;
-use actix_web::web;
-use rand::prelude::*;
-use rand::distr::weighted::WeightedIndex;
 
 pub async fn replace_obs(api: web::Data<API>, req: web::Json<ReplaceObs>) -> impl Responder {
     match Observation::try_from(req.obs.as_str()) {
@@ -160,7 +160,15 @@ pub async fn decide(
         Ok(p) => p,
         Err(e) => return HttpResponse::BadRequest().body(format!("invalid game state: {}", e)),
     };
+    if !partial.can_play() {
+        return HttpResponse::BadRequest()
+            .body("invalid game state: pov is not next to act or hand is complete");
+    }
     let game = partial.head();
+    let legal = game.legal();
+    if legal.is_empty() {
+        return HttpResponse::BadRequest().body("invalid game state: no legal actions available");
+    }
     let bp: &Flagship = &**blueprint;
     let abstraction = bp.encoder().abstraction(&partial.seen());
     let info = NlheInfo::from((&partial, abstraction));
@@ -171,8 +179,12 @@ pub async fn decide(
         .ok()
         .map(|dist| edges[dist.sample(&mut rand::rng())])
         .map(|edge| game.actionize(Edge::from(edge)))
-        .unwrap_or_else(|| *game.legal().choose(&mut rand::rng()).unwrap());
-    let legal: Vec<String> = game.legal().iter().map(|a| a.to_string()).collect();
+        .unwrap_or_else(|| {
+            *legal
+                .choose(&mut rand::rng())
+                .expect("non-empty legal actions")
+        });
+    let legal: Vec<String> = legal.iter().map(|a| a.to_string()).collect();
     HttpResponse::Ok().json(serde_json::json!({
         "action": action.to_string(),
         "legal": legal,

@@ -763,6 +763,24 @@ mod tests {
         assert!(!t.can_play()); // no longer BTN's turn
     }
 
+    #[test]
+    fn terminal_request_is_not_playable() {
+        let seen = Observation::try_from("9d 3c ~ 3s 6h Ks As 6d").expect("valid observation");
+        let actions = [
+            "fold", "fold", "fold", "fold", "raise 3", "call 2", "check", "check", "check",
+            "raise 2", "call 2", "check", "check",
+        ]
+        .into_iter()
+        .map(Action::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("valid actions");
+        let partial = Partial::try_build(Turn::Choice(1), seen, actions).expect("valid history");
+
+        assert_eq!(partial.head().turn(), Turn::Terminal);
+        assert!(partial.head().legal().is_empty());
+        assert!(!partial.can_play());
+    }
+
     /// can_undo: false at initial, true after push
     #[test]
     fn can_undo_conditions() {
