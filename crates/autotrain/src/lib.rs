@@ -24,6 +24,7 @@ mod mode;
 mod pretraining;
 mod schema;
 mod slow;
+mod stability;
 mod trainer;
 
 pub mod workers;
@@ -34,5 +35,6 @@ pub use mode::*;
 pub use pretraining::*;
 pub use schema::*;
 pub use slow::*;
+pub use stability::*;
 pub use trainer::*;
 pub use workers::*;

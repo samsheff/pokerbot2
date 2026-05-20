@@ -53,6 +53,7 @@ pub struct GetPolicy {
     pub turn: String,
     pub seen: String,
     pub past: Vec<String>,
+    pub table_size: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -235,14 +235,35 @@ pub async fn blueprint(api: web::Data<API>, req: web::Json<GetPolicy>) -> impl R
         .map(Action::try_from)
         .collect::<Result<Vec<_>, _>>();
     match (hero, seen, path) {
-        (Ok(hero), Ok(seen), Ok(path)) => match Partial::<6>::try_build(hero, seen, path) {
-            Err(e) => HttpResponse::BadRequest().body(format!("invalid action sequence: {}", e)),
-            Ok(recall) => match api.policy(recall).await {
-                Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
-                Ok(Some(strategy)) => HttpResponse::Ok().json(strategy),
-                Ok(None) => HttpResponse::Ok().json(serde_json::Value::Null),
-            },
-        },
+        (Ok(hero), Ok(seen), Ok(path)) => {
+            let players = match rbp_core::validate_players(req.table_size.unwrap_or(rbp_core::N)) {
+                Ok(players) => players,
+                Err(e) => return HttpResponse::BadRequest().body(e),
+            };
+            match players {
+                2 => blueprint_with::<2>(&api, hero, seen, path).await,
+                3 => blueprint_with::<3>(&api, hero, seen, path).await,
+                4 => blueprint_with::<4>(&api, hero, seen, path).await,
+                5 => blueprint_with::<5>(&api, hero, seen, path).await,
+                _ => blueprint_with::<6>(&api, hero, seen, path).await,
+            }
+        }
         _ => HttpResponse::BadRequest().body("invalid recall format"),
+    }
+}
+
+async fn blueprint_with<const P: usize>(
+    api: &API,
+    hero: Turn,
+    seen: Observation,
+    path: Vec<Action>,
+) -> HttpResponse {
+    match Partial::<P>::try_build(hero, seen, path) {
+        Err(e) => HttpResponse::BadRequest().body(format!("invalid action sequence: {}", e)),
+        Ok(recall) => match api.policy(recall).await {
+            Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+            Ok(Some(strategy)) => HttpResponse::Ok().json(strategy),
+            Ok(None) => HttpResponse::Ok().json(serde_json::Value::Null),
+        },
     }
 }

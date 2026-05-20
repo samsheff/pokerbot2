@@ -9,6 +9,7 @@ pub enum Mode {
     Fast,
     Slow,
     Reset,
+    Stability,
 }
 
 impl Mode {
@@ -20,11 +21,12 @@ impl Mode {
                 "--fast" => Some(Self::Fast),
                 "--slow" => Some(Self::Slow),
                 "--reset" => Some(Self::Reset),
+                "--stability" => Some(Self::Stability),
                 _ => None,
             })
             .unwrap_or_else(|| {
                 eprintln!(
-                    "Usage: trainer --status | --cluster | --fast | --slow | --reset [--players N]"
+                    "Usage: trainer --status | --cluster | --fast | --slow | --reset | --stability [--players N]"
                 );
                 std::process::exit(1);
             })
@@ -48,6 +50,7 @@ impl Mode {
             (Self::Reset, p) => Self::reset(&client, p).await,
             (Self::Status, _) => client.status().await,
             (Self::Cluster, _) => PreTraining::run(&client).await,
+            (Self::Stability, p) => Stability::from_args(p).run(&client).await,
         }
     }
     fn players_from_args() -> usize {

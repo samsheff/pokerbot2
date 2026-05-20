@@ -857,7 +857,10 @@ impl API {
 
 // blueprint lookups
 impl API {
-    pub async fn policy(&self, recall: Partial<6>) -> anyhow::Result<Option<ApiStrategy>> {
+    pub async fn policy<const P: usize>(
+        &self,
+        recall: Partial<P>,
+    ) -> anyhow::Result<Option<ApiStrategy>> {
         let sql: &str = const_format::concatcp!(
             "SELECT edge, ",
             "weight, ",
@@ -865,20 +868,21 @@ impl API {
             "FROM   ",
             BLUEPRINT,
             " ",
-            "WHERE  players = 6 ",
-            "AND    past    = $1 ",
-            "AND    present = $2 ",
-            "AND    choices = $3"
+            "WHERE  players = $1 ",
+            "AND    past    = $2 ",
+            "AND    present = $3 ",
+            "AND    choices = $4"
         );
         let recall = recall.validate()?;
         let present = self.obs_to_abs(recall.seen()).await?;
         let info = NlheInfo::from((&recall, present));
+        let ref players = P as i16;
         let ref history = i64::from(info.subgame());
         let ref present = i16::from(info.bucket());
         let ref choices = i64::from(info.choices());
         let rows = self
             .0
-            .query(sql, &[history, present, choices])
+            .query(sql, &[players, history, present, choices])
             .await
             .map_err(|e| anyhow::anyhow!("fetch policy: {}", e))?;
         match rows.len() {
