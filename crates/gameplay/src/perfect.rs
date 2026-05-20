@@ -34,22 +34,21 @@ use rbp_cards::*;
 /// Stores root game state (POST-blind, with all cards set) and action sequence
 /// (excluding blinds). Game states are derived by applying actions to root.
 #[derive(Debug, Clone)]
-pub struct Perfect {
-    root: Game,
+pub struct Perfect<const P: usize = { rbp_core::N }> {
+    root: Game<P>,
     actions: Vec<Action>,
 }
 
-impl From<(&Partial, Hole)> for Perfect {
+impl<const P: usize> From<(&Partial<P>, Hole)> for Perfect<P> {
     /// Creates history from partial with assumed opponent hole.
     ///
     /// Hero is derived from `partial.turn()`. The root game has:
     /// - Hero's cards from `partial.seen()`
     /// - Opponent's cards from `hole` parameter
     /// - Blinds already posted (POST-blind state)
-    fn from((partial, hole): (&Partial, Hole)) -> Self {
-        debug_assert!(partial.base().n() == 2);
+    fn from((partial, hole): (&Partial<P>, Hole)) -> Self {
         let preblind = partial.base().assume(partial.turn(), hole);
-        let root = Game::blinds()
+        let root = Game::<P>::blinds()
             .into_iter()
             .fold(preblind, |mut g, a| g.consume(a));
         Self {
@@ -59,8 +58,8 @@ impl From<(&Partial, Hole)> for Perfect {
     }
 }
 
-impl Recall for Perfect {
-    fn root(&self) -> Game {
+impl<const P: usize> Recall<P> for Perfect<P> {
+    fn root(&self) -> Game<P> {
         self.root
     }
     fn actions(&self) -> &[Action] {
@@ -69,12 +68,12 @@ impl Recall for Perfect {
 }
 
 #[allow(dead_code)]
-impl Perfect {
+impl<const P: usize> Perfect<P> {
     /// Erases opponent information, returning hero's perspective.
     ///
     /// Extracts hero's hole cards and board from root, discarding
     /// opponent's cards. Inverse of construction from `(&Partial, Hole)`.
-    fn erase(&self, hero: Turn) -> Partial {
+    fn erase(&self, hero: Turn) -> Partial<P> {
         let hole = self.root.seats()[hero.position()].cards();
         let board = Hand::from(self.root.board());
         let observation = Observation::from((Hand::from(hole), board));

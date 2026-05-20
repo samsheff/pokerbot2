@@ -1,10 +1,10 @@
 use rbp_cards::*;
 use rbp_clustering::*;
 use rbp_core::*;
+use rbp_database::*;
 use rbp_gameplay::*;
 use rbp_mccfr::Decision;
 use rbp_nlhe::*;
-use rbp_database::*;
 use rbp_transport::*;
 use std::sync::Arc;
 use tokio_postgres::Client;
@@ -76,11 +76,7 @@ impl API {
     pub async fn obs_to_abs(&self, obs: Observation) -> anyhow::Result<Abstraction> {
         let iso = Isomorphism::from(obs);
         let idx = i64::from(iso);
-        let sql = const_format::concatcp!(
-            "SELECT abs FROM ",
-            ISOMORPHISM,
-            " WHERE obs = $1"
-        );
+        let sql = const_format::concatcp!("SELECT abs FROM ", ISOMORPHISM, " WHERE obs = $1");
         self.0
             .query_one(sql, &[&idx])
             .await
@@ -89,11 +85,7 @@ impl API {
     }
     pub async fn metric(&self, street: Street) -> anyhow::Result<Metric> {
         let s = street as i16;
-        let sql = const_format::concatcp!(
-            "SELECT tri, dx FROM ",
-            METRIC,
-            " WHERE street = $1"
-        );
+        let sql = const_format::concatcp!("SELECT tri, dx FROM ", METRIC, " WHERE street = $1");
         let rows = self
             .0
             .query(sql, &[&s])
@@ -113,11 +105,7 @@ impl API {
 impl API {
     pub async fn abs_equity(&self, abs: Abstraction) -> anyhow::Result<Probability> {
         let abs = i16::from(abs);
-        let sql = const_format::concatcp!(
-            "SELECT equity FROM ",
-            ABSTRACTION,
-            " WHERE abs = $1"
-        );
+        let sql = const_format::concatcp!("SELECT equity FROM ", ABSTRACTION, " WHERE abs = $1");
         self.0
             .query_one(sql, &[&abs])
             .await
@@ -169,9 +157,7 @@ impl API {
         abs2: Abstraction,
     ) -> anyhow::Result<Energy> {
         if abs1.street() != abs2.street() {
-            return Err(anyhow::anyhow!(
-                "abstractions must be from the same street"
-            ));
+            return Err(anyhow::anyhow!("abstractions must be from the same street"));
         }
         if abs1 == abs2 {
             return Ok(0 as Energy);
@@ -191,9 +177,7 @@ impl API {
         obs2: Observation,
     ) -> anyhow::Result<Energy> {
         if obs1.street() != obs2.street() {
-            return Err(anyhow::anyhow!(
-                "observations must be from the same street"
-            ));
+            return Err(anyhow::anyhow!("observations must be from the same street"));
         }
         let (ref hx, ref hy, ref metric) = tokio::try_join!(
             self.obs_histogram(obs1),
@@ -208,11 +192,8 @@ impl API {
 impl API {
     pub async fn abs_population(&self, abs: Abstraction) -> anyhow::Result<usize> {
         let abs = i16::from(abs);
-        let sql = const_format::concatcp!(
-            "SELECT population FROM ",
-            ABSTRACTION,
-            " WHERE abs = $1"
-        );
+        let sql =
+            const_format::concatcp!("SELECT population FROM ", ABSTRACTION, " WHERE abs = $1");
         self.0
             .query_one(sql, &[&abs])
             .await
@@ -244,11 +225,7 @@ impl API {
 impl API {
     pub async fn abs_histogram(&self, abs: Abstraction) -> anyhow::Result<Histogram> {
         let abs_i = i16::from(abs);
-        let sql = const_format::concatcp!(
-            "SELECT next, dx FROM ",
-            TRANSITIONS,
-            " WHERE prev = $1"
-        );
+        let sql = const_format::concatcp!("SELECT next, dx FROM ", TRANSITIONS, " WHERE prev = $1");
         let street = abs.street().next();
         let rows = self
             .0
@@ -880,7 +857,7 @@ impl API {
 
 // blueprint lookups
 impl API {
-    pub async fn policy(&self, recall: Partial) -> anyhow::Result<Option<ApiStrategy>> {
+    pub async fn policy(&self, recall: Partial<6>) -> anyhow::Result<Option<ApiStrategy>> {
         let sql: &str = const_format::concatcp!(
             "SELECT edge, ",
             "weight, ",
@@ -888,7 +865,8 @@ impl API {
             "FROM   ",
             BLUEPRINT,
             " ",
-            "WHERE  past    = $1 ",
+            "WHERE  players = 6 ",
+            "AND    past    = $1 ",
             "AND    present = $2 ",
             "AND    choices = $3"
         );

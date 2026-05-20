@@ -89,6 +89,7 @@ def get_action(
     state: dict,
     actions: list[str],
     pov: int,
+    table_size: int = 6,
     server_url: str = "http://localhost:8888",
 ) -> dict:
     """
@@ -102,6 +103,7 @@ def get_action(
                     Example: ["raise 3", "call 3", "raise 9"]
         pov:        Hero's position — 0 = button (acts first preflop out of
                     position), 1 = big blind.
+        table_size: Number of players dealt into the hand. Defaults to 6.
         server_url: Base URL of the running backend server.
 
     Returns:
@@ -118,7 +120,13 @@ def get_action(
 
     resp = requests.post(
         f"{server_url}/api/decide",
-        json={"hole": hole, "board": board, "actions": actions, "pov": pov},
+        json={
+            "hole": hole,
+            "board": board,
+            "actions": actions,
+            "pov": pov,
+            "table_size": table_size,
+        },
     )
     resp.raise_for_status()
     return resp.json()

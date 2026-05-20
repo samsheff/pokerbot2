@@ -26,9 +26,84 @@ use actix_web::Responder;
 use actix_web::middleware::Logger;
 use actix_web::web;
 use rbp_database::Hydrate;
-use rbp_nlhe::Flagship;
+use rbp_nlhe::*;
 use std::sync::Arc;
 use tokio_postgres::Client;
+
+pub struct BlueprintRegistry {
+    p2: Option<&'static Flagship2>,
+    p3: Option<&'static Flagship3>,
+    p4: Option<&'static Flagship4>,
+    p5: Option<&'static Flagship5>,
+    p6: Option<&'static Flagship6>,
+}
+
+impl BlueprintRegistry {
+    async fn load(client: Arc<Client>) -> Self {
+        ensure_blueprint_players(client.clone()).await;
+        Self {
+            p2: load_blueprint::<2>(client.clone()).await,
+            p3: load_blueprint::<3>(client.clone()).await,
+            p4: load_blueprint::<4>(client.clone()).await,
+            p5: load_blueprint::<5>(client.clone()).await,
+            p6: load_blueprint::<6>(client.clone()).await,
+        }
+    }
+    pub fn p2(&self) -> Option<&'static Flagship2> {
+        self.p2
+    }
+    pub fn p3(&self) -> Option<&'static Flagship3> {
+        self.p3
+    }
+    pub fn p4(&self) -> Option<&'static Flagship4> {
+        self.p4
+    }
+    pub fn p5(&self) -> Option<&'static Flagship5> {
+        self.p5
+    }
+    pub fn p6(&self) -> Option<&'static Flagship6> {
+        self.p6
+    }
+}
+
+async fn ensure_blueprint_players(client: Arc<Client>) {
+    client
+        .batch_execute(const_format::concatcp!(
+            "ALTER TABLE ",
+            rbp_database::BLUEPRINT,
+            " ADD COLUMN IF NOT EXISTS players SMALLINT NOT NULL DEFAULT 6;
+             ALTER TABLE ",
+            rbp_database::BLUEPRINT,
+            " DROP CONSTRAINT IF EXISTS blueprint_past_present_choices_edge_key;
+             DROP INDEX IF EXISTS idx_blueprint_upsert;
+             DROP INDEX IF EXISTS idx_blueprint_bucket;
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_blueprint_upsert_players ON ",
+            rbp_database::BLUEPRINT,
+            " (players, present, past, choices, edge);"
+        ))
+        .await
+        .expect("ensure blueprint players");
+}
+
+async fn load_blueprint<const P: usize>(client: Arc<Client>) -> Option<&'static FlagshipFor<P>> {
+    let rows = client
+        .query_one(
+            const_format::concatcp!(
+                "SELECT COUNT(*) FROM ",
+                rbp_database::BLUEPRINT,
+                " WHERE players = $1"
+            ),
+            &[&(P as i16)],
+        )
+        .await
+        .ok()?
+        .get::<_, i64>(0);
+    if rows > 0 {
+        Some(Box::leak(Box::new(FlagshipFor::<P>::hydrate(client).await)))
+    } else {
+        None
+    }
+}
 
 async fn health(client: web::Data<Arc<Client>>) -> impl Responder {
     match client
@@ -47,9 +122,9 @@ pub async fn run() -> Result<(), std::io::Error> {
     let api = web::Data::new(analysis::API::new(client.clone()));
     let crypto = web::Data::new(rbp_auth::Crypto::from_env());
     log::info!("loading blueprint for inference");
-    let blueprint: &'static Flagship = Box::leak(Box::new(Flagship::hydrate(client.clone()).await));
+    let registry = web::Data::new(BlueprintRegistry::load(client.clone()).await);
+    let blueprint = registry.p6().expect("6-player blueprint must be trained for room hosting");
     let casino = web::Data::new(hosting::Casino::new(client.clone(), blueprint));
-    let blueprint = web::Data::new(blueprint);
     let client = web::Data::new(client);
     log::info!("starting unified server");
     HttpServer::new(move || {
@@ -64,7 +139,7 @@ pub async fn run() -> Result<(), std::io::Error> {
             .app_data(api.clone())
             .app_data(casino.clone())
             .app_data(crypto.clone())
-            .app_data(blueprint.clone())
+            .app_data(registry.clone())
             .app_data(client.clone())
             .route("/health", web::get().to(health))
             .service(

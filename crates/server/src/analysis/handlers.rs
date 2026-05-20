@@ -1,4 +1,5 @@
 use super::API;
+use crate::BlueprintRegistry;
 use actix_web::HttpResponse;
 use actix_web::Responder;
 use actix_web::web;
@@ -139,9 +140,41 @@ pub async fn hst_wrt_obs(api: web::Data<API>, req: web::Json<ObsHist>) -> impl R
     }
 }
 pub async fn decide(
-    blueprint: web::Data<&'static Flagship>,
+    blueprints: web::Data<BlueprintRegistry>,
     req: web::Json<DecideRequest>,
 ) -> impl Responder {
+    let players = match rbp_core::validate_players(req.table_size.unwrap_or(rbp_core::N)) {
+        Ok(players) => players,
+        Err(e) => return HttpResponse::BadRequest().body(e),
+    };
+    match players {
+        2 => match blueprints.p2() {
+            Some(bp) => decide_with::<2>(bp, &req),
+            None => HttpResponse::ServiceUnavailable().body("2-player blueprint is not trained"),
+        },
+        3 => match blueprints.p3() {
+            Some(bp) => decide_with::<3>(bp, &req),
+            None => HttpResponse::ServiceUnavailable().body("3-player blueprint is not trained"),
+        },
+        4 => match blueprints.p4() {
+            Some(bp) => decide_with::<4>(bp, &req),
+            None => HttpResponse::ServiceUnavailable().body("4-player blueprint is not trained"),
+        },
+        5 => match blueprints.p5() {
+            Some(bp) => decide_with::<5>(bp, &req),
+            None => HttpResponse::ServiceUnavailable().body("5-player blueprint is not trained"),
+        },
+        _ => match blueprints.p6() {
+            Some(bp) => decide_with::<6>(bp, &req),
+            None => HttpResponse::ServiceUnavailable().body("6-player blueprint is not trained"),
+        },
+    }
+}
+
+fn decide_with<const P: usize>(
+    blueprint: &'static FlagshipFor<P>,
+    req: &DecideRequest,
+) -> HttpResponse {
     let obs_str = format!("{} ~ {}", req.hole.join(" "), req.board.join(" "));
     let seen = match Observation::try_from(obs_str.as_str()) {
         Ok(o) => o,
@@ -156,7 +189,7 @@ pub async fn decide(
         Ok(a) => a,
         Err(e) => return HttpResponse::BadRequest().body(format!("invalid action: {}", e)),
     };
-    let partial = match Partial::try_build(Turn::from(req.pov), seen, actions) {
+    let partial = match Partial::<P>::try_build(Turn::from(req.pov), seen, actions) {
         Ok(p) => p,
         Err(e) => return HttpResponse::BadRequest().body(format!("invalid game state: {}", e)),
     };
@@ -169,7 +202,7 @@ pub async fn decide(
     if legal.is_empty() {
         return HttpResponse::BadRequest().body("invalid game state: no legal actions available");
     }
-    let bp: &Flagship = &**blueprint;
+    let bp: &FlagshipFor<P> = blueprint;
     let abstraction = bp.encoder().abstraction(&partial.seen());
     let info = NlheInfo::from((&partial, abstraction));
     let policy = bp.profile().averaged_distribution(&info);
@@ -184,6 +217,7 @@ pub async fn decide(
                 .choose(&mut rand::rng())
                 .expect("non-empty legal actions")
         });
+    let action = game.snap(action);
     let legal: Vec<String> = legal.iter().map(|a| a.to_string()).collect();
     HttpResponse::Ok().json(serde_json::json!({
         "action": action.to_string(),
@@ -201,7 +235,7 @@ pub async fn blueprint(api: web::Data<API>, req: web::Json<GetPolicy>) -> impl R
         .map(Action::try_from)
         .collect::<Result<Vec<_>, _>>();
     match (hero, seen, path) {
-        (Ok(hero), Ok(seen), Ok(path)) => match Partial::try_build(hero, seen, path) {
+        (Ok(hero), Ok(seen), Ok(path)) => match Partial::<6>::try_build(hero, seen, path) {
             Err(e) => HttpResponse::BadRequest().body(format!("invalid action sequence: {}", e)),
             Ok(recall) => match api.policy(recall).await {
                 Err(e) => HttpResponse::InternalServerError().body(e.to_string()),

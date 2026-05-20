@@ -9,13 +9,13 @@ use tokio_postgres::Client;
 /// Pool of distributed training workers.
 ///
 /// Uses Pluribus configuration via [`Worker`].
-pub struct Pool {
-    workers: Vec<Worker>,
+pub struct Pool<const P: usize = { rbp_core::N }> {
+    workers: Vec<Worker<P>>,
     started: Instant,
     prior: Mutex<(Instant, usize)>,
 }
 
-impl Pool {
+impl<const P: usize> Pool<P> {
     pub async fn new(client: Arc<Client>) -> Self {
         let now = Instant::now();
         Self {
@@ -50,7 +50,7 @@ impl Pool {
     }
 }
 
-impl Progress for Pool {
+impl<const P: usize> Progress for Pool<P> {
     fn epoch(&self) -> usize {
         self.workers.iter().map(|w| w.epoch()).sum()
     }

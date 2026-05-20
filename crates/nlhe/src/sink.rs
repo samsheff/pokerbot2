@@ -10,18 +10,18 @@ use tokio_postgres::Client;
 /// All INSERT/UPDATE queries are consolidated here.
 #[async_trait::async_trait]
 pub trait Sink: Send + Sync {
-    async fn submit(&self, records: Vec<Record>);
-    async fn advance(&self);
+    async fn submit<const P: usize>(&self, records: Vec<Record>);
+    async fn advance<const P: usize>(&self);
 }
 
 #[async_trait::async_trait]
 impl Sink for Client {
-    async fn submit(&self, records: Vec<Record>) {
+    async fn submit<const P: usize>(&self, records: Vec<Record>) {
         #[rustfmt::skip]
         const SQL: &str = const_format::concatcp!(
-            "INSERT INTO ", BLUEPRINT, " (past, present, choices, edge, weight, regret, evalue, counts) ",
-            "VALUES                      ($1,   $2,      $3,      $4,   $5,     $6,     $7,     $8) ",
-            "ON CONFLICT (past, present, choices, edge) ",
+            "INSERT INTO ", BLUEPRINT, " (players, past, present, choices, edge, weight, regret, evalue, counts) ",
+            "VALUES                      ($1,      $2,   $3,      $4,      $5,   $6,     $7,     $8,     $9) ",
+            "ON CONFLICT (players, past, present, choices, edge) ",
             "DO UPDATE SET ",
                 "weight = EXCLUDED.weight, ",
                 "regret = EXCLUDED.regret, ",
@@ -32,6 +32,7 @@ impl Sink for Client {
             self.execute(
                 SQL,
                 &[
+                    &(P as i16),
                     &i64::from(record.info.subgame()),
                     &i16::from(record.info.bucket()),
                     &i64::from(record.info.choices()),
@@ -46,23 +47,24 @@ impl Sink for Client {
             .expect("blueprint upsert");
         }
     }
-    async fn advance(&self) {
+    async fn advance<const P: usize>(&self) {
         #[rustfmt::skip]
         const SQL: &str = const_format::concatcp!(
             "UPDATE ", EPOCH, " ",
             "SET    value = value + 1 ",
-            "WHERE  key = 'current'"
+            "WHERE  key = $1"
         );
-        self.execute(SQL, &[]).await.expect("epoch advance");
+        let key = format!("current:{P}");
+        self.execute(SQL, &[&key]).await.expect("epoch advance");
     }
 }
 
 #[async_trait::async_trait]
 impl Sink for Arc<Client> {
-    async fn submit(&self, records: Vec<Record>) {
-        self.as_ref().submit(records).await
+    async fn submit<const P: usize>(&self, records: Vec<Record>) {
+        self.as_ref().submit::<P>(records).await
     }
-    async fn advance(&self) {
-        self.as_ref().advance().await
+    async fn advance<const P: usize>(&self) {
+        self.as_ref().advance::<P>().await
     }
 }

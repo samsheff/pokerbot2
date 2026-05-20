@@ -1,7 +1,7 @@
 //! NLHE game type: poker game state.
 use super::*;
 use rbp_cards::*;
-use rbp_core::Utility;
+use rbp_core::{self, Utility};
 use rbp_gameplay::*;
 use rbp_mccfr::*;
 
@@ -9,9 +9,9 @@ use rbp_mccfr::*;
 ///
 /// Newtype wrapper around gameplay `Game` for NLHE-specific CFR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NlheGame(Game);
+pub struct NlheGame<const P: usize = { rbp_core::N }>(Game<P>);
 
-impl NlheGame {
+impl<const P: usize> NlheGame<P> {
     /// Current betting round (street).
     pub fn street(&self) -> Street {
         self.0.street()
@@ -22,11 +22,11 @@ impl NlheGame {
     }
 }
 
-impl CfrGame for NlheGame {
+impl<const P: usize> CfrGame for NlheGame<P> {
     type E = NlheEdge;
     type T = NlheTurn;
     fn root() -> Self {
-        Self(Game::root())
+        Self(Game::<P>::root())
     }
     fn turn(&self) -> Self::T {
         NlheTurn::from(self.0.turn())
@@ -45,18 +45,18 @@ impl CfrGame for NlheGame {
     }
 }
 
-impl From<Game> for NlheGame {
-    fn from(game: Game) -> Self {
+impl<const P: usize> From<Game<P>> for NlheGame<P> {
+    fn from(game: Game<P>) -> Self {
         Self(game)
     }
 }
-impl From<NlheGame> for Game {
-    fn from(game: NlheGame) -> Self {
+impl<const P: usize> From<NlheGame<P>> for Game<P> {
+    fn from(game: NlheGame<P>) -> Self {
         game.0
     }
 }
-impl AsRef<Game> for NlheGame {
-    fn as_ref(&self) -> &Game {
+impl<const P: usize> AsRef<Game<P>> for NlheGame<P> {
+    fn as_ref(&self) -> &Game<P> {
         &self.0
     }
 }

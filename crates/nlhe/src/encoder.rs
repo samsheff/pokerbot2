@@ -4,7 +4,7 @@ use rbp_gameplay::*;
 use rbp_mccfr::*;
 use std::collections::BTreeMap;
 
-type NlheTree = Tree<NlheTurn, NlheEdge, NlheGame, NlheInfo>;
+type NlheTree<const P: usize = { rbp_core::N }> = Tree<NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>;
 
 /// Encoder that maps poker game states to information set identifiers.
 ///
@@ -20,6 +20,16 @@ type NlheTree = Tree<NlheTurn, NlheEdge, NlheGame, NlheInfo>;
 #[derive(Default)]
 pub struct NlheEncoder(BTreeMap<Isomorphism, Abstraction>);
 
+#[derive(Default)]
+pub struct NlheEncoderFor<const P: usize = { rbp_core::N }>(pub NlheEncoder);
+
+impl<const P: usize> std::ops::Deref for NlheEncoderFor<P> {
+    type Target = NlheEncoder;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 impl NlheEncoder {
     /// Looks up the abstraction bucket for an observation.
     ///
@@ -32,7 +42,7 @@ impl NlheEncoder {
             .expect("isomorphism not found in abstraction lookup")
     }
     /// Creates an info set for the root game state.
-    pub fn root(&self, game: &NlheGame) -> NlheInfo {
+    pub fn root<const P: usize>(&self, game: &NlheGame<P>) -> NlheInfo {
         let subgame = Path::default();
         let present = self.abstraction(&game.sweat());
         let choices = game.as_ref().choices(0);
@@ -40,16 +50,16 @@ impl NlheEncoder {
     }
 }
 
-impl rbp_mccfr::Encoder for NlheEncoder {
+impl<const P: usize> rbp_mccfr::Encoder for NlheEncoderFor<P> {
     type T = NlheTurn;
     type E = NlheEdge;
-    type G = NlheGame;
+    type G = NlheGame<P>;
     type I = NlheInfo;
     fn seed(&self, root: &Self::G) -> Self::I {
         self.root(root)
     }
-    fn info(&self, tree: &NlheTree, leaf: Branch<Self::E, Self::G>) -> Self::I {
-        NlheInfo::from((self, tree, leaf))
+    fn info(&self, tree: &NlheTree<P>, leaf: Branch<Self::E, Self::G>) -> Self::I {
+        NlheInfo::from((&self.0, tree, leaf))
     }
     fn resume(&self, past: &[Self::E], game: &Self::G) -> Self::I {
         // THERE MAY BE TRUNCATION HERE
@@ -76,5 +86,13 @@ impl rbp_database::Hydrate for NlheEncoder {
             .map(|(obs, abs)| (Isomorphism::from(obs), Abstraction::from(abs)))
             .collect::<BTreeMap<Isomorphism, Abstraction>>();
         Self(lookup)
+    }
+}
+
+#[cfg(feature = "database")]
+#[async_trait::async_trait]
+impl<const P: usize> rbp_database::Hydrate for NlheEncoderFor<P> {
+    async fn hydrate(client: std::sync::Arc<tokio_postgres::Client>) -> Self {
+        Self(NlheEncoder::hydrate(client).await)
     }
 }

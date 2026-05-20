@@ -1,8 +1,8 @@
 use super::*;
-use rbp_core::Utility;
+use rbp_core::{self, Utility};
 use rbp_gameplay::*;
-use rbp_mccfr::*;
 use rbp_mccfr::Posterior;
+use rbp_mccfr::*;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
@@ -40,28 +40,28 @@ const CFR_BATCH_SIZE_NLHE: usize = 1000;
 ///
 /// With `database` feature, loads encoder abstractions and profile state
 /// from PostgreSQL to resume training or serve inference requests.
-pub struct NlheSolver<R, W, S>
+pub struct NlheSolver<R, W, S, const P: usize = { rbp_core::N }>
 where
     R: RegretSchedule,
     W: PolicySchedule,
     S: SamplingScheme,
 {
     /// Encoder for mapping game states to information sets.
-    pub encoder: NlheEncoder,
+    pub encoder: NlheEncoderFor<P>,
     /// Profile storing accumulated regrets and strategies.
-    pub profile: NlheProfile,
+    pub profile: NlheProfile<P>,
     /// Phantom data for algorithm configuration.
     phantom: PhantomData<fn() -> (R, W, S)>,
 }
 
-impl<R, W, S> NlheSolver<R, W, S>
+impl<R, W, S, const P: usize> NlheSolver<R, W, S, P>
 where
     R: RegretSchedule,
     W: PolicySchedule,
     S: SamplingScheme,
 {
     /// Creates a new solver from profile and encoder.
-    pub fn new(profile: NlheProfile, encoder: NlheEncoder) -> Self {
+    pub fn new(profile: NlheProfile<P>, encoder: NlheEncoderFor<P>) -> Self {
         Self {
             profile,
             encoder,
@@ -74,8 +74,8 @@ where
     /// and initializes the solver from game root through the prefix.
     pub fn subgame(
         &self,
-        recall: &Partial,
-    ) -> SubSolver<'_, NlheProfile, NlheEncoder, SUBGAME_ITERATIONS> {
+        recall: &Partial<P>,
+    ) -> SubSolver<'_, NlheProfile<P>, NlheEncoderFor<P>, SUBGAME_ITERATIONS> {
         SubSolver::new(
             &self.encoder,
             &self.profile,
@@ -99,20 +99,20 @@ where
     ///
     /// Projects observation-level range to abstraction level.
     /// Aggregates reach by abstraction bucket for clustering into worlds.
-    pub fn opponent_range(&self, recall: &Partial) -> Posterior<NlheSecret> {
+    pub fn opponent_range(&self, recall: &Partial<P>) -> Posterior<NlheSecret> {
         let hero = NlheTurn::from(recall.turn());
         recall
             .histories()
             .into_iter()
             .map(|(obs, hist)| (obs, hist.root(), hist.history().into_iter()))
-            .map(|(obs, root, path)| (obs, NlheGame::from(root), path.map(NlheEdge::from)))
+            .map(|(obs, root, path)| (obs, NlheGame::<P>::from(root), path.map(NlheEdge::from)))
             .map(|(obs, root, path)| (obs, self.external_reach(root, hero, path)))
             .map(|(obs, reach)| (NlheSecret::from(self.encoder.abstraction(&obs)), reach))
             .collect::<Posterior<NlheSecret>>()
     }
 }
 
-impl<R, W, S> Solver for NlheSolver<R, W, S>
+impl<R, W, S, const P: usize> Solver for NlheSolver<R, W, S, P>
 where
     R: RegretSchedule,
     W: PolicySchedule,
@@ -120,12 +120,12 @@ where
 {
     type T = NlheTurn;
     type E = NlheEdge;
-    type G = NlheGame;
+    type G = NlheGame<P>;
     type I = NlheInfo;
     type X = NlhePublic;
     type Y = NlheSecret;
-    type N = NlheEncoder;
-    type P = NlheProfile;
+    type N = NlheEncoderFor<P>;
+    type P = NlheProfile<P>;
     type S = S;
     type R = R;
     type W = W;
@@ -189,7 +189,7 @@ where
 
 #[cfg(feature = "database")]
 #[async_trait::async_trait]
-impl<R, W, S> rbp_database::Hydrate for NlheSolver<R, W, S>
+impl<R, W, S, const P: usize> rbp_database::Hydrate for NlheSolver<R, W, S, P>
 where
     R: RegretSchedule,
     W: PolicySchedule,
@@ -197,8 +197,8 @@ where
 {
     async fn hydrate(client: std::sync::Arc<tokio_postgres::Client>) -> Self {
         Self {
-            encoder: NlheEncoder::hydrate(client.clone()).await,
-            profile: NlheProfile::hydrate(client.clone()).await,
+            encoder: NlheEncoderFor::<P>::hydrate(client.clone()).await,
+            profile: NlheProfile::<P>::hydrate(client.clone()).await,
             phantom: PhantomData,
         }
     }

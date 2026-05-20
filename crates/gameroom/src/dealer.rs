@@ -16,13 +16,21 @@ impl<'g> Dealer<'g> {
     /// Deals the next street's cards, returning the street and resulting game state.
     /// Panics if the game is not ready to deal (not at a chance node).
     pub fn deal(&mut self) -> Street {
-        *self.game = self.game.apply(self.game.reveal());
+        *self.game = self
+            .game
+            .try_apply_snapped(self.game.reveal())
+            .expect("non-terminal game state")
+            .0;
         self.game.street()
     }
-    /// Applies an action to the game.
-    /// Panics if the action is not legal.
+    /// Applies an action to the game, snapping illegal actions to legal ones.
+    /// Panics only if the game is terminal.
     pub fn apply(&mut self, action: Action) {
-        *self.game = self.game.apply(action);
+        *self.game = self
+            .game
+            .try_apply_snapped(action)
+            .expect("non-terminal game state")
+            .0;
     }
     /// Returns the passive action (check if allowed, else fold).
     pub fn passive(&self) -> Action {
@@ -94,10 +102,27 @@ mod tests {
             dealer.apply(Action::Fold);
             dealer.apply(Action::Fold);
             dealer.apply(Action::Call(1)); // SB calls
-            dealer.apply(Action::Check);   // BB checks
+            dealer.apply(Action::Check); // BB checks
             assert!(dealer.is_chance());
             let street = dealer.deal();
             assert_eq!(street, Street::Flop);
+        }
+    }
+    #[test]
+    fn dealer_snaps_fold_at_chance_to_deal() {
+        let mut game = Game::root();
+        {
+            let mut dealer = Dealer::new(&mut game);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Fold);
+            dealer.apply(Action::Call(1));
+            dealer.apply(Action::Check);
+            assert!(dealer.is_chance());
+            dealer.apply(Action::Fold);
+            assert_eq!(dealer.street(), Street::Flop);
+            assert!(matches!(dealer.turn(), Turn::Choice(_)));
         }
     }
     #[test]

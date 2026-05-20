@@ -143,6 +143,22 @@ impl<T> Display for ID<T> {
 // ============================================================================
 /// Number of players at the table.
 pub const N: usize = 6;
+/// Minimum supported table size for NLHE training/inference.
+pub const MIN_PLAYERS: usize = 2;
+/// Maximum supported table size for NLHE training/inference.
+pub const MAX_PLAYERS: usize = N;
+
+/// Validates a table size for supported NLHE models.
+pub fn validate_players(players: usize) -> Result<usize, String> {
+    if (MIN_PLAYERS..=MAX_PLAYERS).contains(&players) {
+        Ok(players)
+    } else {
+        Err(format!(
+            "table_size must be between {} and {}",
+            MIN_PLAYERS, MAX_PLAYERS
+        ))
+    }
+}
 /// Starting stack size in big blinds.
 pub const STACK: Chips = 100;
 /// Big blind amount.

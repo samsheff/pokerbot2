@@ -46,13 +46,13 @@ mod profile;
 mod public;
 mod record;
 mod secret;
-mod solver;
-mod strategy;
-mod turn;
 #[cfg(feature = "database")]
 mod sink;
+mod solver;
 #[cfg(feature = "database")]
 mod source;
+mod strategy;
+mod turn;
 
 pub use edge::*;
 pub use encoder::*;
@@ -63,13 +63,13 @@ pub use profile::*;
 pub use public::*;
 pub use record::*;
 pub use secret::*;
-pub use solver::*;
-pub use strategy::*;
-pub use turn::*;
 #[cfg(feature = "database")]
 pub use sink::*;
+pub use solver::*;
 #[cfg(feature = "database")]
 pub use source::*;
+pub use strategy::*;
+pub use turn::*;
 
 /// Flagship NLHE solver configuration.
 ///
@@ -77,8 +77,15 @@ pub use source::*;
 /// - [`rbp_mccfr::PluribusSampling`] — Probabilistic pruning with warm-up period
 /// - [`rbp_mccfr::PluribusRegret`] — No discount for positive regrets, t/(t+1) for negative
 /// - [`rbp_mccfr::LinearWeight`] — Emphasize more recent iterations in average strategy
-pub type Flagship = NlheSolver<
+pub type FlagshipFor<const P: usize = { rbp_core::N }> = NlheSolver<
     rbp_mccfr::PluribusRegret,   //
     rbp_mccfr::LinearWeight,     //
     rbp_mccfr::PluribusSampling, //
+    P,
 >;
+pub type Flagship2 = FlagshipFor<2>;
+pub type Flagship3 = FlagshipFor<3>;
+pub type Flagship4 = FlagshipFor<4>;
+pub type Flagship5 = FlagshipFor<5>;
+pub type Flagship6 = FlagshipFor<6>;
+pub type Flagship = Flagship6;

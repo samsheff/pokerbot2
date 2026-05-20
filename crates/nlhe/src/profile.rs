@@ -1,6 +1,5 @@
 use super::*;
-use rbp_core::Probability;
-use rbp_core::Utility;
+use rbp_core::{self, Probability, Utility};
 use rbp_mccfr::*;
 use std::collections::BTreeMap;
 
@@ -26,7 +25,7 @@ use std::collections::BTreeMap;
 /// With the `database` feature, supports loading/saving to PostgreSQL
 /// via [`Hydrate`] and [`Schema`] implementations.
 #[derive(Default)]
-pub struct NlheProfile {
+pub struct NlheProfile<const P: usize = { rbp_core::N }> {
     /// Current training iteration (epoch).
     pub iterations: usize,
     /// Nested map: Info → NlheEdge → Encounter (weight, regret, evalue).
@@ -35,17 +34,17 @@ pub struct NlheProfile {
     pub metrics: Metrics,
 }
 
-impl Profile for NlheProfile {
+impl<const P: usize> Profile for NlheProfile<P> {
     type T = NlheTurn;
     type E = NlheEdge;
-    type G = NlheGame;
+    type G = NlheGame<P>;
     type I = NlheInfo;
 
     fn increment(&mut self) {
         self.iterations += 1;
     }
     fn walker(&self) -> Self::T {
-        NlheTurn::from(self.epochs() % 2)
+        NlheTurn::from(self.epochs() % P)
     }
     fn epochs(&self) -> usize {
         self.iterations
@@ -84,12 +83,13 @@ impl Profile for NlheProfile {
 }
 
 #[cfg(feature = "database")]
-impl rbp_database::Schema for NlheProfile {
+impl<const P: usize> rbp_database::Schema for NlheProfile<P> {
     fn name() -> &'static str {
         rbp_database::BLUEPRINT
     }
     fn columns() -> &'static [tokio_postgres::types::Type] {
         &[
+            tokio_postgres::types::Type::INT2,   // players
             tokio_postgres::types::Type::INT8,   // past (subgame path)
             tokio_postgres::types::Type::INT2,   // present (abstraction bucket)
             tokio_postgres::types::Type::INT8,   // choices (available edges)
@@ -104,7 +104,7 @@ impl rbp_database::Schema for NlheProfile {
         const_format::concatcp!(
             "COPY ",
             rbp_database::BLUEPRINT,
-            " (past, present, choices, edge, weight, regret, evalue, counts) FROM STDIN BINARY"
+            " (players, past, present, choices, edge, weight, regret, evalue, counts) FROM STDIN BINARY"
         )
     }
     fn creates() -> &'static str {
@@ -113,6 +113,7 @@ impl rbp_database::Schema for NlheProfile {
             rbp_database::BLUEPRINT,
             " (
                 edge       BIGINT,
+                players    SMALLINT NOT NULL DEFAULT 6,
                 past       BIGINT,
                 present    SMALLINT,
                 choices    BIGINT,
@@ -120,7 +121,7 @@ impl rbp_database::Schema for NlheProfile {
                 regret     REAL,
                 evalue     REAL,
                 counts     INT DEFAULT 0,
-                UNIQUE     (past, present, choices, edge)
+                UNIQUE     (players, past, present, choices, edge)
             );"
         )
     }
@@ -128,19 +129,19 @@ impl rbp_database::Schema for NlheProfile {
         const_format::concatcp!(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_blueprint_upsert  ON ",
             rbp_database::BLUEPRINT,
-            " (present, past, choices, edge);
+            " (players, present, past, choices, edge);
              CREATE        INDEX IF NOT EXISTS idx_blueprint_bucket  ON ",
             rbp_database::BLUEPRINT,
-            " (present, past, choices);
+            " (players, present, past, choices);
              CREATE        INDEX IF NOT EXISTS idx_blueprint_present ON ",
             rbp_database::BLUEPRINT,
-            " (present);
+            " (players, present);
              CREATE        INDEX IF NOT EXISTS idx_blueprint_edge    ON ",
             rbp_database::BLUEPRINT,
-            " (edge);
+            " (players, edge);
              CREATE        INDEX IF NOT EXISTS idx_blueprint_past    ON ",
             rbp_database::BLUEPRINT,
-            " (past);"
+            " (players, past);"
         )
     }
     fn truncates() -> &'static str {
@@ -160,28 +161,42 @@ impl rbp_database::Schema for NlheProfile {
 
 #[cfg(feature = "database")]
 #[async_trait::async_trait]
-impl rbp_database::Hydrate for NlheProfile {
+impl<const P: usize> rbp_database::Hydrate for NlheProfile<P> {
     async fn hydrate(client: std::sync::Arc<tokio_postgres::Client>) -> Self {
         log::info!("{:<32}{:<32}", "loading blueprint", "from database");
-        const EPOCH_SQL: &str = const_format::concatcp!(
-            "SELECT value FROM ",
-            rbp_database::EPOCH,
-            " WHERE key = 'current'"
-        );
-        let iterations = client
-            .query_opt(EPOCH_SQL, &[])
+        const EPOCH_SQL: &str =
+            const_format::concatcp!("SELECT value FROM ", rbp_database::EPOCH, " WHERE key = $1");
+        let epoch_key = format!("current:{P}");
+        let iterations = match client
+            .query_opt(EPOCH_SQL, &[&epoch_key])
             .await
             .ok()
             .flatten()
-            .map(|r| r.get::<_, i64>(0) as usize)
-            .expect("to have already created epoch metadata");
+        {
+            Some(row) => row.get::<_, i64>(0) as usize,
+            None => {
+                const LEGACY_EPOCH_SQL: &str = const_format::concatcp!(
+                    "SELECT value FROM ",
+                    rbp_database::EPOCH,
+                    " WHERE key = 'current'"
+                );
+                client
+                    .query_opt(LEGACY_EPOCH_SQL, &[])
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|r| r.get::<_, i64>(0) as usize)
+                    .expect("to have already created epoch metadata")
+            }
+        };
         const BLUEPRINT_SQL: &str = const_format::concatcp!(
             "SELECT past, present, choices, edge, weight, regret, evalue, counts FROM ",
-            rbp_database::BLUEPRINT
+            rbp_database::BLUEPRINT,
+            " WHERE players = $1"
         );
         let mut encounters = BTreeMap::new();
         for row in client
-            .query(BLUEPRINT_SQL, &[])
+            .query(BLUEPRINT_SQL, &[&(P as i16)])
             .await
             .expect("to have already created blueprint")
         {
@@ -219,14 +234,15 @@ impl rbp_database::Hydrate for NlheProfile {
 }
 
 #[cfg(feature = "database")]
-impl NlheProfile {
-    pub fn rows(self) -> impl Iterator<Item = (i64, i16, i64, i64, f32, f32, f32, i32)> {
+impl<const P: usize> NlheProfile<P> {
+    pub fn rows(self) -> impl Iterator<Item = (i16, i64, i16, i64, i64, f32, f32, f32, i32)> {
         self.encounters.into_iter().flat_map(|(info, edges)| {
             let subgame = i64::from(info.subgame());
             let present = i16::from(info.bucket());
             let choices = i64::from(info.choices());
             edges.into_iter().map(move |(edge, encounter)| {
                 (
+                    P as i16,
                     subgame,
                     present,
                     choices,

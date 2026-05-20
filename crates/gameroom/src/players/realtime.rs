@@ -1,11 +1,11 @@
 //! Subgame-solving player that refines blueprint at decision time.
-use rbp_gameplay::*;
 use crate::*;
+use rand::distr::weighted::WeightedIndex;
+use rand::prelude::*;
+use rbp_gameplay::*;
 use rbp_mccfr::*;
 use rbp_nlhe::*;
 use rbp_transport::Density;
-use rand::distr::weighted::WeightedIndex;
-use rand::prelude::*;
 
 /// Compute player using real-time subgame solving.
 ///
@@ -38,11 +38,12 @@ impl RealTimePlayer {
             .iter()
             .map(|e| policy.density(&SubEdge::Inner(*e)))
             .collect::<Vec<_>>();
-        WeightedIndex::new(&weights)
+        let action = WeightedIndex::new(&weights)
             .ok()
             .map(|dist| edges[dist.sample(&mut rand::rng())])
             .map(|edge| game.actionize(Edge::from(edge)))
-            .unwrap_or_else(|| game.legal().choose(&mut rand::rng()).copied().unwrap())
+            .unwrap_or_else(|| game.legal().choose(&mut rand::rng()).copied().unwrap());
+        game.snap(action)
     }
 }
 

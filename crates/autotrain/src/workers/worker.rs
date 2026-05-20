@@ -17,7 +17,7 @@ use tokio_postgres::Client;
 /// Uses Pluribus configuration:
 /// - [`PluribusRegret`] — hybrid regret (no discount positive, t/(t+1) negative)
 /// - [`LinearWeight`] — linear weighting for average strategy
-pub struct Worker {
+pub struct Worker<const P: usize = { rbp_core::N }> {
     client: Arc<Client>,
     nodes: AtomicUsize,
     epoch: AtomicUsize,
@@ -25,7 +25,7 @@ pub struct Worker {
     start: Instant,
 }
 
-impl Worker {
+impl<const P: usize> Worker<P> {
     pub fn new(client: Arc<Client>) -> Self {
         Self {
             client,
@@ -57,12 +57,12 @@ impl Worker {
         self.infos.fetch_add(1, Ordering::Relaxed);
     }
     fn walker(&self) -> NlheTurn {
-        NlheTurn::from(self.epoch() % 2)
+        NlheTurn::from(self.epoch() % P)
     }
 }
 
 // main training interface
-impl Worker {
+impl<const P: usize> Worker<P> {
     pub async fn batch(&self) -> Vec<Record> {
         let mut updates = Vec::new();
         for infoset in self
@@ -80,19 +80,19 @@ impl Worker {
     }
 
     pub async fn step(&self) {
-        self.client.submit(self.batch().await).await;
-        self.client.advance().await;
+        self.client.submit::<P>(self.batch().await).await;
+        self.client.advance::<P>().await;
         self.inc_epoch();
     }
 }
 
 // encoding operations
-impl Worker {
-    async fn encode(&self, game: &Game) -> Abstraction {
+impl<const P: usize> Worker<P> {
+    async fn encode(&self, game: &Game<P>) -> Abstraction {
         self.client.encode(Isomorphism::from(game.sweat())).await
     }
 
-    async fn seed(&self, game: &Game) -> NlheInfo {
+    async fn seed(&self, game: &Game<P>) -> NlheInfo {
         let present = self.encode(game).await;
         let subgame = Path::default();
         let choices = game.choices(0);
@@ -101,8 +101,8 @@ impl Worker {
 
     async fn info(
         &self,
-        tree: &Tree<NlheTurn, NlheEdge, NlheGame, NlheInfo>,
-        leaf: Branch<NlheEdge, NlheGame>,
+        tree: &Tree<NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
+        leaf: Branch<NlheEdge, NlheGame<P>>,
     ) -> NlheInfo {
         let (edge, ref game, head) = leaf;
         let subgame = std::iter::once(edge)
@@ -119,17 +119,17 @@ impl Worker {
 
     fn branches(
         &self,
-        node: &Node<NlheTurn, NlheEdge, NlheGame, NlheInfo>,
-    ) -> Vec<Branch<NlheEdge, NlheGame>> {
+        node: &Node<NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
+    ) -> Vec<Branch<NlheEdge, NlheGame<P>>> {
         node.branches()
     }
 }
 
 // batch strategy calculations (single DB round trip per info)
-impl Worker {
+impl<const P: usize> Worker<P> {
     /// Fetch all accumulated values for an info in one query.
     async fn memory(&self, info: &NlheInfo) -> Memory {
-        self.client.memory(*info).await
+        self.client.memory::<P>(*info).await
     }
     /// Compute policy distribution for all edges (single DB round trip).
     async fn policy(&self, info: &NlheInfo) -> Policy<NlheEdge> {
@@ -178,12 +178,12 @@ impl Worker {
 }
 
 // exploration operations
-impl Worker {
+impl<const P: usize> Worker<P> {
     async fn explore(
         &self,
-        node: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
-        branches: Vec<Branch<NlheEdge, NlheGame>>,
-    ) -> Vec<Branch<NlheEdge, NlheGame>> {
+        node: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
+        branches: Vec<Branch<NlheEdge, NlheGame<P>>>,
+    ) -> Vec<Branch<NlheEdge, NlheGame<P>>> {
         match (branches.len(), node.game().turn()) {
             (0, _) => branches,
             (_, p) if p == self.walker() => branches,
@@ -195,9 +195,9 @@ impl Worker {
 
     fn explore_any(
         &self,
-        node: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
-        branches: Vec<Branch<NlheEdge, NlheGame>>,
-    ) -> Vec<Branch<NlheEdge, NlheGame>> {
+        node: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
+        branches: Vec<Branch<NlheEdge, NlheGame<P>>>,
+    ) -> Vec<Branch<NlheEdge, NlheGame<P>>> {
         use rand::Rng;
         debug_assert!(!branches.is_empty());
         let mut choices = branches;
@@ -206,9 +206,9 @@ impl Worker {
 
     async fn explore_one(
         &self,
-        node: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
-        branches: Vec<Branch<NlheEdge, NlheGame>>,
-    ) -> Vec<Branch<NlheEdge, NlheGame>> {
+        node: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
+        branches: Vec<Branch<NlheEdge, NlheGame<P>>>,
+    ) -> Vec<Branch<NlheEdge, NlheGame<P>>> {
         use rand::distr::Distribution;
         use rand::distr::weighted::WeightedIndex;
         let mut choices = branches;
@@ -245,11 +245,11 @@ impl Worker {
 // 1. chance sampling is uniform (1/n) in both reach and sampling
 // 2. these terms cancel in relative_value = reach / sampling
 // 3. filtering avoids wasteful database round trips for Edge::Draw
-impl Worker {
+impl<const P: usize> Worker<P> {
     async fn relative_reach(
         &self,
-        root: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
-        leaf: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
+        root: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
+        leaf: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
     ) -> Probability {
         let path = leaf
             .into_iter()
@@ -263,7 +263,7 @@ impl Worker {
     }
     async fn cfactual_reach(
         &self,
-        root: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
+        root: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
     ) -> Probability {
         let path = root
             .into_iter()
@@ -277,7 +277,7 @@ impl Worker {
     }
     async fn sampling_reach(
         &self,
-        leaf: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
+        leaf: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
     ) -> Probability {
         let path = leaf
             .into_iter()
@@ -292,8 +292,8 @@ impl Worker {
 
     async fn ancestor_value(
         &self,
-        root: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
-        kids: &[Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>],
+        root: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
+        kids: &[Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>],
     ) -> Utility {
         futures::future::join_all(kids.iter().map(|leaf| self.relative_value(root, leaf)))
             .await
@@ -303,18 +303,17 @@ impl Worker {
 }
 
 // utility calculations
-impl Worker {
+impl<const P: usize> Worker<P> {
     async fn relative_value(
         &self,
-        root: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
-        leaf: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
+        root: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
+        leaf: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
     ) -> Utility {
         debug_assert!(
             leaf.game().turn() == NlheTurn::terminal(),
             "worker builds full trees; leaves must be terminal"
         );
-        CfrGame::payoff(leaf.game(), root.game().turn())
-            * self.relative_reach(root, leaf).await
+        CfrGame::payoff(leaf.game(), root.game().turn()) * self.relative_reach(root, leaf).await
             / self.sampling_reach(leaf).await
     }
 
@@ -323,7 +322,7 @@ impl Worker {
     /// V(I) = Σ_a π(a) × Q(I,a)
     async fn expected_value(
         &self,
-        root: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
+        root: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
     ) -> Utility {
         debug_assert!(self.walker() == root.game().turn());
         let ref edges = root.outgoing();
@@ -339,7 +338,7 @@ impl Worker {
 
     async fn cfactual_value(
         &self,
-        root: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
+        root: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
         edge: &NlheEdge,
     ) -> Utility {
         debug_assert!(self.walker() == root.game().turn());
@@ -352,7 +351,7 @@ impl Worker {
 
     async fn node_gain(
         &self,
-        root: &Node<'_, NlheTurn, NlheEdge, NlheGame, NlheInfo>,
+        root: &Node<'_, NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
         edge: &NlheEdge,
         expected: Utility,
     ) -> Utility {
@@ -362,12 +361,15 @@ impl Worker {
 }
 
 // tree sampling
-impl Worker {
-    pub async fn tree(&self) -> Tree<NlheTurn, NlheEdge, NlheGame, NlheInfo> {
+impl<const P: usize> Worker<P> {
+    pub async fn tree(&self) -> Tree<NlheTurn, NlheEdge, NlheGame<P>, NlheInfo> {
         let mut todo = Vec::new();
-        let ref root = Game::root();
+        let ref root = Game::<P>::root();
         let mut tree = Tree::default();
-        let node = tree.seed(self.seed(root).await, NlheGame::from(Game::root()));
+        let node = tree.seed(
+            self.seed(root).await,
+            NlheGame::<P>::from(Game::<P>::root()),
+        );
         todo.extend(self.explore(&node, self.branches(&node)).await);
         self.inc_nodes();
         while let Some(leaf) = todo.pop() {
@@ -380,10 +382,10 @@ impl Worker {
 }
 
 // CFR vector calculations
-impl Worker {
+impl<const P: usize> Worker<P> {
     async fn counterfactual(
         &self,
-        infoset: InfoSet<NlheTurn, NlheEdge, NlheGame, NlheInfo>,
+        infoset: InfoSet<NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
     ) -> Counterfactual<NlheEdge, NlheInfo> {
         Counterfactual {
             info: infoset.info(),
@@ -395,7 +397,7 @@ impl Worker {
     /// Compute the expected value of an information set under current strategy.
     async fn infoset_value(
         &self,
-        infoset: &InfoSet<NlheTurn, NlheEdge, NlheGame, NlheInfo>,
+        infoset: &InfoSet<NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
     ) -> Utility {
         futures::future::join_all(infoset.span().iter().map(|r| self.expected_value(r)))
             .await
@@ -410,7 +412,7 @@ impl Worker {
     /// sampling may have expanded different edges at different nodes.
     async fn regret_vector(
         &self,
-        infoset: &InfoSet<NlheTurn, NlheEdge, NlheGame, NlheInfo>,
+        infoset: &InfoSet<NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
     ) -> Policy<NlheEdge> {
         let ref span = infoset.span();
         let ref expected =
@@ -451,7 +453,7 @@ impl Worker {
     /// Compute policy vector using single DB round trip (batch optimized).
     async fn policy_vector(
         &self,
-        infoset: &InfoSet<NlheTurn, NlheEdge, NlheGame, NlheInfo>,
+        infoset: &InfoSet<NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>,
     ) -> Policy<NlheEdge> {
         let info = infoset.info();
         let memory = self.memory(&info).await;
@@ -479,7 +481,7 @@ impl Worker {
 }
 
 // update calculations
-impl Worker {
+impl<const P: usize> Worker<P> {
     async fn updates(&self, cfr: Counterfactual<NlheEdge, NlheInfo>) -> Vec<Record> {
         let ref info = cfr.info;
         let ref regret_vector = cfr.regret;
@@ -513,7 +515,7 @@ impl Worker {
 }
 
 // sampling parameters
-impl Worker {
+impl<const P: usize> Worker<P> {
     fn temperature(&self) -> Entropy {
         SAMPLING_TEMPERATURE
     }

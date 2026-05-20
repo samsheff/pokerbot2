@@ -4,8 +4,8 @@ use rbp_core::Arbitrary;
 use rbp_gameplay::*;
 use rbp_mccfr::*;
 
-type NlheTree = Tree<NlheTurn, NlheEdge, NlheGame, NlheInfo>;
-type NlheBranch = Branch<NlheEdge, NlheGame>;
+type NlheTree<const P: usize = { rbp_core::N }> = Tree<NlheTurn, NlheEdge, NlheGame<P>, NlheInfo>;
+type NlheBranch<const P: usize = { rbp_core::N }> = Branch<NlheEdge, NlheGame<P>>;
 
 /// NLHE information set: what a player knows at a decision point.
 ///
@@ -84,10 +84,7 @@ impl CfrInfo for NlheInfo {
 // Construction methods
 // =============================================================================
 
-impl<R> From<(&R, Abstraction)> for NlheInfo
-where
-    R: Recall,
-{
+impl<const P: usize> From<(&Partial<P>, Abstraction)> for NlheInfo {
     /// Constructs info set for policy lookup from recall history.
     ///
     /// Critically, `choices()` is computed from the **edge-derived** game state,
@@ -97,13 +94,15 @@ where
     ///
     /// Without this, a custom raise of 19 chips (snapped to "1:2 pot" edge) would
     /// produce different `choices()` than training, causing info set mismatch.
-    fn from((recall, secret): (&R, Abstraction)) -> Self {
+    fn from((recall, secret): (&Partial<P>, Abstraction)) -> Self {
         let subgame = recall.subgame();
         let canonical = recall
             .history()
             .into_iter()
             .map(NlheEdge::from)
-            .fold(NlheGame::root(), |game, edge| CfrGame::apply(&game, edge));
+            .fold(NlheGame::<P>::root(), |game, edge| {
+                CfrGame::apply(&game, edge)
+            });
         let choices = Game::from(canonical).choices(subgame.aggression());
         Self::from((subgame, secret, choices))
     }
@@ -125,11 +124,11 @@ impl From<(Path, Abstraction, Path)> for NlheInfo {
     }
 }
 
-impl From<(&NlheEncoder, &NlheTree, NlheBranch)> for NlheInfo {
+impl<const P: usize> From<(&NlheEncoder, &NlheTree<P>, NlheBranch<P>)> for NlheInfo {
     /// Creates an info set during tree expansion.
     /// Used by [`Encoder::info`] to compute info for new tree nodes.
     /// Collects current-street edge history from tree traversal.
-    fn from((encoder, tree, leaf): (&NlheEncoder, &NlheTree, NlheBranch)) -> Self {
+    fn from((encoder, tree, leaf): (&NlheEncoder, &NlheTree<P>, NlheBranch<P>)) -> Self {
         let (edge, ref game, head) = leaf;
         let subgame = std::iter::once(edge)
             .chain(tree.at(head).map(|(_, e)| e))
@@ -152,7 +151,7 @@ impl Arbitrary for NlheInfo {
         use std::ops::Not;
         loop {
             let street = Street::random();
-            let (mut game, mut depth) = (Game::root(), 0usize);
+            let (mut game, mut depth) = (Game::<{ rbp_core::N }>::root(), 0usize);
             let subgame = std::iter::from_fn(|| {
                 (game.street() < street || game.turn().is_chance()).then(|| {
                     game.choices(depth)

@@ -8,7 +8,9 @@ use tokio_postgres::Client;
 #[async_trait::async_trait]
 pub trait Check: Send + Sync {
     async fn epochs(&self) -> usize;
+    async fn epochs_for(&self, players: usize) -> usize;
     async fn blueprint(&self) -> usize;
+    async fn blueprint_for(&self, players: usize) -> usize;
     async fn clustered(&self, street: Street) -> bool;
     async fn status(&self) {
         fn commas(n: usize) -> String {
@@ -37,6 +39,18 @@ pub trait Check: Send + Sync {
         log::info!("├────────────┼───────────────┤");
         log::info!("│ Epoch      │ {:>13} │", commas(self.epochs().await));
         log::info!("│ Blueprint  │ {:>13} │", commas(self.blueprint().await));
+        for players in rbp_core::MIN_PLAYERS..=rbp_core::MAX_PLAYERS {
+            log::info!(
+                "│ P{} epoch   │ {:>13} │",
+                players,
+                commas(self.epochs_for(players).await)
+            );
+            log::info!(
+                "│ P{} rows    │ {:>13} │",
+                players,
+                commas(self.blueprint_for(players).await)
+            );
+        }
         log::info!("└────────────┴───────────────┘");
     }
 }
@@ -52,9 +66,28 @@ impl Check for Client {
             .map(|r| r.get::<_, i64>(0) as usize)
             .unwrap_or(0)
     }
+    async fn epochs_for(&self, players: usize) -> usize {
+        let sql = format!("SELECT value FROM {t} WHERE key = $1", t = EPOCH);
+        let key = format!("current:{players}");
+        self.query_opt(&sql, &[&key])
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.get::<_, i64>(0) as usize)
+            .unwrap_or(0)
+    }
     async fn blueprint(&self) -> usize {
         let sql = format!("SELECT COUNT(*) FROM {t}", t = BLUEPRINT);
         self.query_opt(&sql, &[])
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.get::<_, i64>(0) as usize)
+            .unwrap_or(0)
+    }
+    async fn blueprint_for(&self, players: usize) -> usize {
+        let sql = format!("SELECT COUNT(*) FROM {t} WHERE players = $1", t = BLUEPRINT);
+        self.query_opt(&sql, &[&(players as i16)])
             .await
             .ok()
             .flatten()
@@ -73,8 +106,14 @@ impl Check for Arc<Client> {
     async fn epochs(&self) -> usize {
         self.as_ref().epochs().await
     }
+    async fn epochs_for(&self, players: usize) -> usize {
+        self.as_ref().epochs_for(players).await
+    }
     async fn blueprint(&self) -> usize {
         self.as_ref().blueprint().await
+    }
+    async fn blueprint_for(&self, players: usize) -> usize {
+        self.as_ref().blueprint_for(players).await
     }
     async fn clustered(&self, street: Street) -> bool {
         self.as_ref().clustered(street).await

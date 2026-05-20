@@ -1,12 +1,12 @@
 //! Database-loaded player that samples directly from trained blueprint.
-use rbp_gameplay::*;
 use crate::*;
-use rbp_mccfr::*;
-use rbp_nlhe::*;
-use rbp_database::Hydrate;
-use rbp_transport::Density;
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
+use rbp_database::Hydrate;
+use rbp_gameplay::*;
+use rbp_mccfr::*;
+use rbp_nlhe::*;
+use rbp_transport::Density;
 
 /// Compute player using only blueprint lookup.
 ///
@@ -27,11 +27,12 @@ impl DatabasePlayer {
     fn sample(game: &Game, policy: Policy<NlheEdge>) -> Action {
         let edges = policy.support().collect::<Vec<_>>();
         let weights = edges.iter().map(|e| policy.density(e)).collect::<Vec<_>>();
-        WeightedIndex::new(&weights)
+        let action = WeightedIndex::new(&weights)
             .ok()
             .map(|dist| edges[dist.sample(&mut rand::rng())])
             .map(|edge| game.actionize(Edge::from(edge)))
-            .unwrap_or_else(|| game.legal().choose(&mut rand::rng()).copied().unwrap())
+            .unwrap_or_else(|| game.legal().choose(&mut rand::rng()).copied().unwrap());
+        game.snap(action)
     }
 }
 

@@ -8,7 +8,7 @@ use tokio_postgres::Client;
 pub trait Stage: Send + Sync {
     async fn stage(&self);
     async fn merge(&self);
-    async fn stamp(&self, n: usize);
+    async fn stamp<const P: usize>(&self, n: usize);
 }
 
 #[async_trait::async_trait]
@@ -24,9 +24,9 @@ impl Stage for Client {
     }
     async fn merge(&self) {
         let sql = format!(
-            "INSERT INTO   {t1} (past, present, choices, edge, weight, regret, evalue, counts)
-             SELECT              past, present, choices, edge, weight, regret, evalue, counts FROM {t2}
-             ON CONFLICT  (past, present, choices, edge)
+            "INSERT INTO   {t1} (players, past, present, choices, edge, weight, regret, evalue, counts)
+             SELECT              players, past, present, choices, edge, weight, regret, evalue, counts FROM {t2}
+             ON CONFLICT  (players, past, present, choices, edge)
              DO UPDATE SET
                  weight = EXCLUDED.weight,
                  regret = EXCLUDED.regret,
@@ -38,12 +38,13 @@ impl Stage for Client {
         );
         self.batch_execute(&sql).await.expect("upsert blueprint");
     }
-    async fn stamp(&self, n: usize) {
+    async fn stamp<const P: usize>(&self, n: usize) {
         let sql = format!(
-            "UPDATE {t} SET value = value + $1 WHERE key = 'current'",
+            "UPDATE {t} SET value = value + $1 WHERE key = $2",
             t = EPOCH
         );
-        self.execute(&sql, &[&(n as i64)])
+        let key = format!("current:{P}");
+        self.execute(&sql, &[&(n as i64), &key])
             .await
             .expect("update epoch");
     }
@@ -57,7 +58,7 @@ impl Stage for Arc<Client> {
     async fn merge(&self) {
         self.as_ref().merge().await
     }
-    async fn stamp(&self, n: usize) {
-        self.as_ref().stamp(n).await
+    async fn stamp<const P: usize>(&self, n: usize) {
+        self.as_ref().stamp::<P>(n).await
     }
 }

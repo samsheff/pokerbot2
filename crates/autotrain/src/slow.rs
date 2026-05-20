@@ -1,18 +1,19 @@
 //! Slow distributed training session
-use crate::*;
 use crate::workers::*;
+use crate::*;
+use rbp_core;
 use std::sync::Arc;
 use tokio_postgres::Client;
 
 /// Slow distributed training using Worker pool.
 ///
 /// Uses Pluribus configuration via [`Pool`].
-pub struct SlowSession {
+pub struct SlowSession<const P: usize = { rbp_core::N }> {
     client: Arc<Client>,
-    pool: Pool,
+    pool: Pool<P>,
 }
 
-impl SlowSession {
+impl<const P: usize> SlowSession<P> {
     pub async fn new(client: Arc<Client>) -> Self {
         PreTraining::run(&client).await;
         Self {
@@ -23,7 +24,7 @@ impl SlowSession {
 }
 
 #[async_trait::async_trait]
-impl Trainer for SlowSession {
+impl<const P: usize> Trainer for SlowSession<P> {
     fn client(&self) -> &Arc<Client> {
         &self.client
     }

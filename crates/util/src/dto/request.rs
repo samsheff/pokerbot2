@@ -61,4 +61,5 @@ pub struct DecideRequest {
     pub board: Vec<String>,
     pub actions: Vec<String>,
     pub pov: usize,
+    pub table_size: Option<usize>,
 }

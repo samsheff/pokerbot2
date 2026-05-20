@@ -22,23 +22,23 @@ use super::*;
 /// - `choices()` — Available actions at current state
 /// - `aggression()` — Trailing aggressive action count
 /// - `complete()` — Complete action sequence including blinds (for display)
-pub trait Recall {
+pub trait Recall<const P: usize = { rbp_core::N }> {
     /// The starting game state for replaying actions (POST-blind).
-    fn root(&self) -> Game;
+    fn root(&self) -> Game<P>;
 
     /// The action sequence from root to current state (excludes blinds).
     fn actions(&self) -> &[Action];
 
     /// Complete action sequence including blinds (for client display).
     fn complete(&self) -> Vec<Action> {
-        Game::blinds()
+        Game::<P>::blinds()
             .into_iter()
             .chain(self.actions().iter().copied())
             .collect()
     }
 
     /// Current game state (replay actions from root).
-    fn head(&self) -> Game {
+    fn head(&self) -> Game<P> {
         self.actions()
             .iter()
             .copied()
@@ -46,14 +46,14 @@ pub trait Recall {
     }
 
     /// Sequence of game states from root to head.
-    fn states(&self) -> Vec<Game> {
+    fn states(&self) -> Vec<Game<P>> {
         let root = self.root();
         let acts = self
             .actions()
             .iter()
             .copied()
             .scan(root, |g, a| Some(g.consume(a)))
-            .collect::<Vec<Game>>();
+            .collect::<Vec<Game<P>>>();
         std::iter::once(root).chain(acts).collect()
     }
 

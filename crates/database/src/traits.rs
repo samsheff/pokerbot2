@@ -118,7 +118,10 @@ impl Row for (i32, f32) {
 #[async_trait::async_trait]
 impl Row for (i16, i16, f32) {
     async fn write(self, writer: Pin<&mut BinaryCopyInWriter>) {
-        writer.write(&[&self.0, &self.1, &self.2]).await.expect("write");
+        writer
+            .write(&[&self.0, &self.1, &self.2])
+            .await
+            .expect("write");
     }
 }
 
@@ -129,6 +132,18 @@ impl Row for (i64, i16, i64, i64, f32, f32, f32, i32) {
     async fn write(self, writer: Pin<&mut BinaryCopyInWriter>) {
         writer
             .write(&[&self.0, &self.1, &self.2, &self.3, &self.4, &self.5, &self.6, &self.7])
+            .await
+            .expect("write");
+    }
+}
+
+/// Row format for table-size-scoped blueprint strategies.
+#[rustfmt::skip]
+#[async_trait::async_trait]
+impl Row for (i16, i64, i16, i64, i64, f32, f32, f32, i32) {
+    async fn write(self, writer: Pin<&mut BinaryCopyInWriter>) {
+        writer
+            .write(&[&self.0, &self.1, &self.2, &self.3, &self.4, &self.5, &self.6, &self.7, &self.8])
             .await
             .expect("write");
     }

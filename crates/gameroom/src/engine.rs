@@ -116,7 +116,7 @@ impl Engine<Dealing> {
         );
         let action = self.next_action(pos).await;
         log::debug!("[engine] P{} chose {}", pos, action);
-        self.apply(action);
+        let action = self.apply(action);
         self.broadcast(Event::Action {
             hand: self.hand,
             seat: pos,
@@ -294,9 +294,14 @@ macro_rules! impl_engine_internals {
         $(
             impl Engine<$phase> {
                 #[allow(dead_code)]
-                fn apply(&mut self, action: Action) {
+                fn apply(&mut self, action: Action) -> Action {
+                    let (game, action) = self
+                        .game
+                        .try_apply_snapped(action)
+                        .expect("non-terminal game state");
                     self.history.push(action);
-                    self.game = self.game.apply(action);
+                    self.game = game;
+                    action
                 }
                 fn recall(&self, pos: Position) -> Partial {
                     Partial::from((
@@ -468,5 +473,21 @@ mod tests {
     fn engine_state_default_is_seating() {
         let state = EngineState::default();
         assert!(matches!(state, EngineState::Seating(_)));
+    }
+    #[test]
+    fn engine_apply_records_snapped_action() {
+        let mut engine = Engine::<Seating>::default().start();
+        for _ in 0..4 {
+            engine.apply(Action::Fold);
+        }
+        engine.apply(Action::Call(1));
+        engine.apply(Action::Check);
+        assert_eq!(engine.turn(), Turn::Chance);
+
+        let action = engine.apply(Action::Fold);
+
+        assert!(matches!(action, Action::Draw(_)));
+        assert!(matches!(engine.history().last(), Some(Action::Draw(_))));
+        assert_eq!(engine.game().street(), Street::Flop);
     }
 }

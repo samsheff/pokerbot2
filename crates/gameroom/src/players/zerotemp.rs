@@ -1,10 +1,10 @@
 //! Zero-temperature player that always takes the most likely action.
-use rbp_gameplay::*;
 use crate::*;
+use rand::prelude::*;
+use rbp_gameplay::*;
 use rbp_mccfr::*;
 use rbp_nlhe::*;
 use rbp_transport::Density;
-use rand::prelude::*;
 
 /// Compute player using subgame solving with deterministic action selection.
 ///
@@ -25,7 +25,7 @@ impl ZeroTempPlayer {
     }
     /// Selects the highest-probability action from subgame policy (argmax).
     fn argmax(game: &Game, policy: Policy<SubEdge<NlheEdge>>) -> Action {
-        policy
+        let action = policy
             .support()
             .filter_map(|e| match e {
                 SubEdge::Inner(e) => Some(e),
@@ -38,7 +38,8 @@ impl ZeroTempPlayer {
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|edge| game.actionize(Edge::from(edge)))
-            .unwrap_or_else(|| game.legal().choose(&mut rand::rng()).copied().unwrap())
+            .unwrap_or_else(|| game.legal().choose(&mut rand::rng()).copied().unwrap());
+        game.snap(action)
     }
 }
 

@@ -33,19 +33,19 @@ use std::ops::Not;
 /// Assumes default stacks (100bb) and P0 on button. Blinds are constant
 /// and handled by `root()` returning a POST-blind state.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Partial {
+pub struct Partial<const P: usize = { rbp_core::N }> {
     pov: Turn,
     actions: Vec<Action>,
     reveals: Arrangement,
 }
 
-impl Arbitrary for Partial {
+impl<const P: usize> Arbitrary for Partial<P> {
     fn random() -> Self {
         Self::initial(Turn::Choice(0))
     }
 }
 
-impl Partial {
+impl<const P: usize> Partial<P> {
     /// Creates a recall at the start of a hand (blinds posted, no decisions).
     pub fn initial(pov: Turn) -> Self {
         Self {
@@ -64,9 +64,9 @@ impl Partial {
     }
 }
 
-impl Recall for Partial {
-    fn root(&self) -> Game {
-        Game::blinds()
+impl<const P: usize> Recall<P> for Partial<P> {
+    fn root(&self) -> Game<P> {
+        Game::<P>::blinds()
             .into_iter()
             .fold(self.base(), |mut g, a| g.consume(a))
     }
@@ -76,7 +76,7 @@ impl Recall for Partial {
 }
 
 /// Strategy lookup methods.
-impl Partial {
+impl<const P: usize> Partial<P> {
     /// Returns all betting edges (Open or Raise) available at the current state.
     pub fn betting_edges(&self) -> Vec<Edge> {
         let game = self.head();
@@ -93,7 +93,7 @@ impl Partial {
     /// [`Perfect`] that can compute exact reach probabilities.
     /// Since `Partial` has partial information (only hero's cards),
     /// this method enumerates the unknown opponent hands.
-    pub fn histories(&self) -> Vec<(Observation, Perfect)> {
+    pub fn histories(&self) -> Vec<(Observation, Perfect<P>)> {
         self.seen()
             .opponents()
             .map(|villain| {
@@ -105,7 +105,7 @@ impl Partial {
 }
 
 /// Constructs recall from a POV and arrangement (no decisions yet).
-impl From<(Turn, Arrangement)> for Partial {
+impl<const P: usize> From<(Turn, Arrangement)> for Partial<P> {
     fn from((pov, reveals): (Turn, Arrangement)) -> Self {
         let actions = Vec::new();
         Self {
@@ -117,19 +117,19 @@ impl From<(Turn, Arrangement)> for Partial {
 }
 
 /// random non-folding actions lead to this street
-impl From<Street> for Partial {
+impl<const P: usize> From<Street> for Partial<P> {
     fn from(_: Street) -> Self {
         todo!()
     }
 }
 
-impl From<(Turn, Observation, Vec<Action>)> for Partial {
+impl<const P: usize> From<(Turn, Observation, Vec<Action>)> for Partial<P> {
     fn from((pov, seen, actions): (Turn, Observation, Vec<Action>)) -> Self {
         Self::try_build(pov, seen, actions).expect("valid action sequence")
     }
 }
 
-impl Partial {
+impl<const P: usize> Partial<P> {
     /// Fallible constructor from (POV, observation, actions).
     ///
     /// Returns `Err` if any action in the sequence is illegal,
@@ -147,12 +147,12 @@ impl Partial {
 }
 
 /// State reconstruction methods.
-impl Partial {
+impl<const P: usize> Partial<P> {
     /// Returns the initial game state (before blinds, with hero's hole cards).
-    pub fn base(&self) -> Game {
+    pub fn base(&self) -> Game<P> {
         // @const-stacks
         // @const-dealer
-        Game::default().wipe(Hole::from(self.seen()))
+        Game::<P>::default().wipe(Hole::from(self.seen()))
     }
     /// The current betting street.
     pub fn street(&self) -> Street {
@@ -216,7 +216,7 @@ impl Partial {
             .skip(1)
             .zip(self.actions().iter().cloned())
             .map(|(game, action)| (action, game))
-            .collect::<Vec<(Action, Game)>>()
+            .collect::<Vec<(Action, Game<P>)>>()
             .into_iter()
             .take_while(|(_, game)| game.street() <= street)
             .map(|(action, _)| action)
@@ -297,7 +297,7 @@ impl Partial {
 }
 
 /// Action modification methods.
-impl Partial {
+impl<const P: usize> Partial<P> {
     /// Removes the most recent action and any trailing draws.
     pub fn undo(&self) -> Self {
         debug_assert!(self.can_undo());
@@ -328,7 +328,7 @@ impl Partial {
 }
 
 /// Validation.
-impl Partial {
+impl<const P: usize> Partial<P> {
     /// Validates alignment and playability, returning error if invalid.
     pub fn validate(self) -> anyhow::Result<Self> {
         let recall = self.sprout();
@@ -343,7 +343,7 @@ impl Partial {
 }
 
 /// Auto-advancement to non-chance states.
-impl Partial {
+impl<const P: usize> Partial<P> {
     /// Advances by inserting draw actions until at a decision point.
     fn sprout(&self) -> Self {
         let mut copy = self.clone();
@@ -366,7 +366,7 @@ impl Partial {
 }
 
 /// State predicates.
-impl Partial {
+impl<const P: usize> Partial<P> {
     /// True if it's hero's turn and observation is current.
     pub fn can_play(&self) -> bool {
         self.head().turn() == self.turn() //               is it our turn right now?
@@ -397,7 +397,7 @@ impl Partial {
 /// Display shows a compact visual representation of the game history
 /// Format: table with cards from arrangement (preserving deal order)
 /// and actions in a fixed-width grid layout
-impl std::fmt::Display for Partial {
+impl<const P: usize> std::fmt::Display for Partial<P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         const L: usize = 4;
         const R: usize = 44;
@@ -454,7 +454,7 @@ mod tests {
     /// initial recall: aligned, at preflop, empty (no decisions yet), reset is identity
     #[test]
     fn initial_invariants() {
-        let r = Partial::initial(Turn::Choice(0));
+        let r = Partial::<{ rbp_core::N }>::initial(Turn::Choice(0));
         assert!(r.empty());
         assert!(r.aligned());
         assert_eq!(r.reset(), r);
@@ -467,7 +467,7 @@ mod tests {
     /// reset is idempotent: reset(reset(x)) == reset(x)
     #[test]
     fn reset_idempotent() {
-        let r = Partial::initial(Turn::Choice(0))
+        let r = Partial::<{ rbp_core::N }>::initial(Turn::Choice(0))
             .push(Action::Fold)
             .push(Action::Fold)
             .push(Action::Fold)
@@ -478,17 +478,17 @@ mod tests {
     /// push then undo returns to original path length
     #[test]
     fn push_undo_inverse() {
-        let r = Partial::initial(Turn::Choice(0));
+        let r = Partial::<{ rbp_core::N }>::initial(Turn::Choice(0));
         let a = r.head().legal().first().cloned().expect("legal");
         assert_eq!(r.push(a).undo().subgame().length(), r.subgame().length());
     }
 
-    /// base() returns Game::default with hero's hole cards; no blinds posted yet
+    /// base() returns Game::<{ rbp_core::N }>::default with hero's hole cards; no blinds posted yet
     /// root() returns game state after blinds are posted
     /// head() returns current state after applying all actions to root
     #[test]
     fn base_vs_root_vs_head() {
-        let r = Partial::initial(Turn::Choice(0));
+        let r = Partial::<{ rbp_core::N }>::initial(Turn::Choice(0));
         let base = r.base();
         let root = r.root();
         let head = r.head();
@@ -496,15 +496,21 @@ mod tests {
         assert_eq!(root.street(), Street::Pref);
         assert_eq!(head.street(), Street::Pref);
         assert_eq!(base.pot(), 0); // no blinds yet
-        assert_eq!(root.pot(), Game::sblind() + Game::bblind()); // blinds posted
-        assert_eq!(head.pot(), Game::sblind() + Game::bblind()); // same as root when empty
+        assert_eq!(
+            root.pot(),
+            Game::<{ rbp_core::N }>::sblind() + Game::<{ rbp_core::N }>::bblind()
+        ); // blinds posted
+        assert_eq!(
+            head.pot(),
+            Game::<{ rbp_core::N }>::sblind() + Game::<{ rbp_core::N }>::bblind()
+        ); // same as root when empty
     }
 
     /// states reconstructs game states: [root, after_action_0, after_action_1, ..., head]
     /// states length = actions length + 1 (root state plus one state per action)
     #[test]
     fn states_reconstruction() {
-        let r = Partial::initial(Turn::Choice(0)).push(Action::Fold);
+        let r = Partial::<{ rbp_core::N }>::initial(Turn::Choice(0)).push(Action::Fold);
         let states = r.states();
         assert_eq!(states.len(), r.actions().len() + 1);
         assert_eq!(states.first(), Some(&r.root()));
@@ -518,7 +524,7 @@ mod tests {
     /// subgame returns current street edges only
     #[test]
     fn subgame_current_street() {
-        let r = Partial::initial(Turn::Choice(0));
+        let r = Partial::<{ rbp_core::N }>::initial(Turn::Choice(0));
         assert_eq!(r.subgame().length(), 0);
         let r = r.push(Action::Fold);
         assert_eq!(r.subgame().length(), 1);
@@ -538,9 +544,9 @@ mod tests {
             Action::Call(1),
             Action::Check,
         ];
-        assert!(Partial::from((Turn::Choice(0), obs, act)).aligned());
+        assert!(Partial::<{ rbp_core::N }>::from((Turn::Choice(0), obs, act)).aligned());
         assert!(
-            Partial::from((Turn::Choice(0), Arrangement::from(Street::Flop)))
+            Partial::<{ rbp_core::N }>::from((Turn::Choice(0), Arrangement::from(Street::Flop)))
                 .push(Action::Fold)
                 .push(Action::Fold)
                 .push(Action::Fold)
@@ -555,7 +561,7 @@ mod tests {
     /// this is valid when user sets observation before adding all actions
     #[test]
     fn behindness_observation_ahead() {
-        let behind = Partial {
+        let behind = Partial::<{ rbp_core::N }> {
             pov: Turn::Choice(0),
             actions: Vec::new(),
             reveals: Arrangement::from(Street::Turn),
@@ -567,7 +573,8 @@ mod tests {
     /// board length: pref=0, flop=3, turn=4, river=5
     #[test]
     fn board_by_street() {
-        let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Rive)));
+        let r =
+            Partial::<{ rbp_core::N }>::from((Turn::Choice(0), Arrangement::from(Street::Rive)));
         assert_eq!(r.board().len(), 0);
         // 4 folds (UTG–BTN) + SB calls + BB checks → flop
         let r = r
@@ -588,15 +595,16 @@ mod tests {
     /// to test pure truncation, use observation matching target street
     #[test]
     fn truncate_to_street() {
-        let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Flop)))
-            .push(Action::Fold)    // UTG
-            .push(Action::Fold)    // UTG+1
-            .push(Action::Fold)    // CO
-            .push(Action::Fold)    // BTN
-            .push(Action::Call(1)) // SB
-            .push(Action::Check)   // BB → flop
-            .push(Action::Check)   // SB flop
-            .push(Action::Check);  // BB flop (no turn, obs is flop)
+        let r =
+            Partial::<{ rbp_core::N }>::from((Turn::Choice(0), Arrangement::from(Street::Flop)))
+                .push(Action::Fold) // UTG
+                .push(Action::Fold) // UTG+1
+                .push(Action::Fold) // CO
+                .push(Action::Fold) // BTN
+                .push(Action::Call(1)) // SB
+                .push(Action::Check) // BB → flop
+                .push(Action::Check) // SB flop
+                .push(Action::Check); // BB flop (no turn, obs is flop)
         let t = r.truncate(Street::Pref);
         // sprout advances to flop since obs has flop cards
         assert!(r.head().street() == Street::Flop);
@@ -607,15 +615,16 @@ mod tests {
     /// decisions(street) returns non-blind, non-draw actions for that street
     #[test]
     fn decisions_per_street() {
-        let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Flop)))
-            .push(Action::Fold)    // UTG
-            .push(Action::Fold)    // UTG+1
-            .push(Action::Fold)    // CO
-            .push(Action::Fold)    // BTN
-            .push(Action::Call(1)) // SB
-            .push(Action::Check)   // BB → flop
-            .push(Action::Check)   // SB flop
-            .push(Action::Check);  // BB flop
+        let r =
+            Partial::<{ rbp_core::N }>::from((Turn::Choice(0), Arrangement::from(Street::Flop)))
+                .push(Action::Fold) // UTG
+                .push(Action::Fold) // UTG+1
+                .push(Action::Fold) // CO
+                .push(Action::Fold) // BTN
+                .push(Action::Call(1)) // SB
+                .push(Action::Check) // BB → flop
+                .push(Action::Check) // SB flop
+                .push(Action::Check); // BB flop
         assert_eq!(r.decisions(Street::Pref).len(), 6);
         assert_eq!(r.decisions(Street::Flop).len(), 2);
         assert!(r.decisions(Street::Pref).iter().all(|a| a.is_choice()));
@@ -625,7 +634,8 @@ mod tests {
     /// walk through all streets: UTG (pos 3) acts first preflop, SB (pos 1) first postflop
     #[test]
     fn playability_all_streets() {
-        let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Rive)));
+        let r =
+            Partial::<{ rbp_core::N }>::from((Turn::Choice(0), Arrangement::from(Street::Rive)));
         assert_eq!(r.head().turn(), Turn::Choice(3)); // UTG acts first preflop
         assert_eq!(r.head().street(), Street::Pref);
         // 4 folds (UTG–BTN) + SB calls + BB checks → flop
@@ -651,17 +661,22 @@ mod tests {
     #[test]
     fn playability_not_our_turn() {
         let r =
-            Partial::from((Turn::Choice(0), Arrangement::from(Street::Pref))).push(Action::Fold);
+            Partial::<{ rbp_core::N }>::from((Turn::Choice(0), Arrangement::from(Street::Pref)))
+                .push(Action::Fold);
         assert_eq!(r.head().turn(), Turn::Choice(4)); // UTG+1 acts after UTG folds
     }
 
     /// from Arrangement starts with empty actions (blinds in root)
     #[test]
     fn from_arrangement_empty_actions() {
-        let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Pref)));
+        let r =
+            Partial::<{ rbp_core::N }>::from((Turn::Choice(0), Arrangement::from(Street::Pref)));
         assert_eq!(r.actions().len(), 0);
         // but root() has blinds posted
-        assert_eq!(r.root().pot(), Game::sblind() + Game::bblind());
+        assert_eq!(
+            r.root().pot(),
+            Game::<{ rbp_core::N }>::sblind() + Game::<{ rbp_core::N }>::bblind()
+        );
     }
 
     /// from tuple stores only provided actions (no blinds)
@@ -671,10 +686,13 @@ mod tests {
         let act = vec![
             Action::Fold, // UTG folds
         ];
-        let r = Partial::from((Turn::Choice(0), obs, act.clone()));
+        let r = Partial::<{ rbp_core::N }>::from((Turn::Choice(0), obs, act.clone()));
         assert_eq!(r.actions().len(), act.len());
         // all_actions() includes blinds for display
-        assert_eq!(r.complete().len(), Game::blinds().len() + act.len());
+        assert_eq!(
+            r.complete().len(),
+            Game::<{ rbp_core::N }>::blinds().len() + act.len()
+        );
     }
 
     /// replace swaps arrangement, updates draw actions
@@ -690,7 +708,7 @@ mod tests {
             Action::Call(1),
             Action::Check,
         ];
-        let old = Partial::from((Turn::Choice(0), obs, act));
+        let old = Partial::<{ rbp_core::N }>::from((Turn::Choice(0), obs, act));
         let new = old.replace(Arrangement::from(Street::Flop));
         assert_ne!(new.seen(), old.seen());
         assert_eq!(new.turn(), old.turn());
@@ -699,7 +717,8 @@ mod tests {
     /// revealed(street) returns cards for that street
     #[test]
     fn revealed_per_street() {
-        let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Turn)));
+        let r =
+            Partial::<{ rbp_core::N }>::from((Turn::Choice(0), Arrangement::from(Street::Turn)));
         assert_eq!(r.revealed(Street::Flop).len(), 3);
         assert_eq!(r.revealed(Street::Turn).len(), 1);
         assert_eq!(r.revealed(Street::Rive).len(), 0);
@@ -708,9 +727,9 @@ mod tests {
     /// empty: no decisions beyond blinds
     #[test]
     fn empty_means_no_decisions() {
-        assert!(Partial::initial(Turn::Choice(0)).empty());
+        assert!(Partial::<{ rbp_core::N }>::initial(Turn::Choice(0)).empty());
         assert!(
-            Partial::initial(Turn::Choice(0))
+            Partial::<{ rbp_core::N }>::initial(Turn::Choice(0))
                 .push(Action::Fold)
                 .empty()
                 .not()
@@ -725,7 +744,7 @@ mod tests {
             Action::Raise(4), //
             Action::Raise(8),
         ];
-        let r = Partial::from((Turn::Choice(0), obs, act));
+        let r = Partial::<{ rbp_core::N }>::from((Turn::Choice(0), obs, act));
         assert_eq!(
             r.aggression(),
             r.subgame()
@@ -741,7 +760,7 @@ mod tests {
     #[test]
     fn choices_nonempty() {
         assert!(
-            Partial::from((Turn::Choice(0), Arrangement::from(Street::Pref)))
+            Partial::<{ rbp_core::N }>::from((Turn::Choice(0), Arrangement::from(Street::Pref)))
                 .choices()
                 .length()
                 > 0
@@ -751,13 +770,11 @@ mod tests {
     /// can_play: hero's turn (pov=BTN=P0) and at observation street
     #[test]
     fn can_play_conditions() {
-        let r = Partial::from((Turn::Choice(0), Arrangement::from(Street::Pref)));
+        let r =
+            Partial::<{ rbp_core::N }>::from((Turn::Choice(0), Arrangement::from(Street::Pref)));
         assert!(!r.can_play()); // UTG (P3) acts first preflop, not BTN (P0)
         // after UTG, UTG+1, CO fold → BTN's turn
-        let s = r
-            .push(Action::Fold)
-            .push(Action::Fold)
-            .push(Action::Fold);
+        let s = r.push(Action::Fold).push(Action::Fold).push(Action::Fold);
         assert!(s.can_play()); // BTN's turn
         let t = s.push(Action::Fold); // BTN folds → SB's turn
         assert!(!t.can_play()); // no longer BTN's turn
@@ -774,7 +791,8 @@ mod tests {
         .map(Action::try_from)
         .collect::<Result<Vec<_>, _>>()
         .expect("valid actions");
-        let partial = Partial::try_build(Turn::Choice(1), seen, actions).expect("valid history");
+        let partial = Partial::<{ rbp_core::N }>::try_build(Turn::Choice(1), seen, actions)
+            .expect("valid history");
 
         assert_eq!(partial.head().turn(), Turn::Terminal);
         assert!(partial.head().legal().is_empty());
@@ -784,7 +802,7 @@ mod tests {
     /// can_undo: false at initial, true after push
     #[test]
     fn can_undo_conditions() {
-        let r = Partial::initial(Turn::Choice(0));
+        let r = Partial::<{ rbp_core::N }>::initial(Turn::Choice(0));
         assert!(r.can_undo().not());
         assert!(r.push(Action::Fold).can_undo());
     }
@@ -792,7 +810,7 @@ mod tests {
     /// can_push: legal actions pass, illegal fail
     #[test]
     fn can_push_conditions() {
-        let r = Partial::initial(Turn::Choice(0));
+        let r = Partial::<{ rbp_core::N }>::initial(Turn::Choice(0));
         assert!(r.can_push(&Action::Call(2))); // UTG must call 2 to match BB
         assert!(r.can_push(&Action::Check).not());
     }
