@@ -6,27 +6,63 @@ use actix_web::web;
 use rbp_auth;
 use rbp_core::ID;
 use rbp_gameroom::Room;
+use std::sync::Arc;
 
-pub async fn start(casino: web::Data<Casino>) -> impl Responder {
-    match casino.into_inner().start().await {
-        Ok(id) => HttpResponse::Ok().json(serde_json::json!({ "room_id": id.to_string() })),
-        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+pub struct RoomHosting {
+    casino: Option<Arc<Casino>>,
+}
+
+impl RoomHosting {
+    pub fn enabled(casino: Arc<Casino>) -> Self {
+        Self {
+            casino: Some(casino),
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self { casino: None }
+    }
+
+    fn casino(&self) -> Result<&Arc<Casino>, HttpResponse> {
+        self.casino.as_ref().ok_or_else(|| {
+            HttpResponse::ServiceUnavailable()
+                .body("room hosting requires a loaded 6-player blueprint")
+        })
     }
 }
-pub async fn leave(casino: web::Data<Casino>, path: web::Path<uuid::Uuid>) -> impl Responder {
-    match casino.close(ID::from(path.into_inner())).await {
-        Ok(()) => HttpResponse::Ok().json(serde_json::json!({ "status": "left" })),
-        Err(e) => HttpResponse::NotFound().body(e.to_string()),
+
+pub async fn start(hosting: web::Data<RoomHosting>) -> impl Responder {
+    match hosting.casino() {
+        Ok(casino) => match casino.start().await {
+            Ok(id) => HttpResponse::Ok().json(serde_json::json!({ "room_id": id.to_string() })),
+            Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+        },
+        Err(response) => response,
     }
 }
+
+pub async fn leave(hosting: web::Data<RoomHosting>, path: web::Path<uuid::Uuid>) -> impl Responder {
+    match hosting.casino() {
+        Ok(casino) => match casino.close(ID::from(path.into_inner())).await {
+            Ok(()) => HttpResponse::Ok().json(serde_json::json!({ "status": "left" })),
+            Err(e) => HttpResponse::NotFound().body(e.to_string()),
+        },
+        Err(response) => response,
+    }
+}
+
 pub async fn enter(
-    casino: web::Data<Casino>,
+    hosting: web::Data<RoomHosting>,
     tokens: web::Data<rbp_auth::Crypto>,
     path: web::Path<uuid::Uuid>,
     query: web::Query<std::collections::HashMap<String, String>>,
     body: web::Payload,
     req: HttpRequest,
 ) -> impl Responder {
+    let casino = match hosting.casino() {
+        Ok(casino) => casino,
+        Err(response) => return response.map_into_right_body(),
+    };
     let id: ID<Room> = ID::from(path.into_inner());
     query
         .get("token")

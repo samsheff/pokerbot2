@@ -30,6 +30,19 @@ use rbp_nlhe::*;
 use std::sync::Arc;
 use tokio_postgres::Client;
 
+#[derive(Clone, Copy, Debug)]
+pub struct ServerOptions {
+    pub max_inference_players: usize,
+}
+
+impl Default for ServerOptions {
+    fn default() -> Self {
+        Self {
+            max_inference_players: rbp_core::MAX_PLAYERS,
+        }
+    }
+}
+
 pub struct BlueprintRegistry {
     p2: Option<&'static Flagship2>,
     p3: Option<&'static Flagship3>,
@@ -39,14 +52,14 @@ pub struct BlueprintRegistry {
 }
 
 impl BlueprintRegistry {
-    async fn load(client: Arc<Client>) -> Self {
+    async fn load(client: Arc<Client>, max_inference_players: usize) -> Self {
         ensure_blueprint_players(client.clone()).await;
         Self {
-            p2: load_blueprint::<2>(client.clone()).await,
-            p3: load_blueprint::<3>(client.clone()).await,
-            p4: load_blueprint::<4>(client.clone()).await,
-            p5: load_blueprint::<5>(client.clone()).await,
-            p6: load_blueprint::<6>(client.clone()).await,
+            p2: load_blueprint::<2>(client.clone(), max_inference_players).await,
+            p3: load_blueprint::<3>(client.clone(), max_inference_players).await,
+            p4: load_blueprint::<4>(client.clone(), max_inference_players).await,
+            p5: load_blueprint::<5>(client.clone(), max_inference_players).await,
+            p6: load_blueprint::<6>(client.clone(), max_inference_players).await,
         }
     }
     pub fn p2(&self) -> Option<&'static Flagship2> {
@@ -85,7 +98,18 @@ async fn ensure_blueprint_players(client: Arc<Client>) {
         .expect("ensure blueprint players");
 }
 
-async fn load_blueprint<const P: usize>(client: Arc<Client>) -> Option<&'static FlagshipFor<P>> {
+async fn load_blueprint<const P: usize>(
+    client: Arc<Client>,
+    max_inference_players: usize,
+) -> Option<&'static FlagshipFor<P>> {
+    if P > max_inference_players {
+        log::info!(
+            "skipping {}-player blueprint; max inference players is {}",
+            P,
+            max_inference_players
+        );
+        return None;
+    }
     let rows = client
         .query_one(
             const_format::concatcp!(
@@ -99,8 +123,13 @@ async fn load_blueprint<const P: usize>(client: Arc<Client>) -> Option<&'static 
         .ok()?
         .get::<_, i64>(0);
     if rows > 0 {
+        log::info!("loading {}-player blueprint for inference", P);
         Some(Box::leak(Box::new(FlagshipFor::<P>::hydrate(client).await)))
     } else {
+        log::info!(
+            "{}-player blueprint is not trained; skipping inference load",
+            P
+        );
         None
     }
 }
@@ -118,13 +147,34 @@ async fn health(client: web::Data<Arc<Client>>) -> impl Responder {
 
 #[rustfmt::skip]
 pub async fn run() -> Result<(), std::io::Error> {
+    run_with_options(ServerOptions::default()).await
+}
+
+#[rustfmt::skip]
+pub async fn run_with_options(options: ServerOptions) -> Result<(), std::io::Error> {
+    let max_inference_players = rbp_core::validate_players(options.max_inference_players)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let client = rbp_database::db().await;
     let api = web::Data::new(analysis::API::new(client.clone()));
     let crypto = web::Data::new(rbp_auth::Crypto::from_env());
-    log::info!("loading blueprint for inference");
-    let registry = web::Data::new(BlueprintRegistry::load(client.clone()).await);
-    let blueprint = registry.p6().expect("6-player blueprint must be trained for room hosting");
-    let casino = web::Data::new(hosting::Casino::new(client.clone(), blueprint));
+    log::info!(
+        "loading blueprints for inference up to {} players",
+        max_inference_players
+    );
+    let registry = web::Data::new(BlueprintRegistry::load(client.clone(), max_inference_players).await);
+    let room_hosting = web::Data::new(match registry.p6() {
+        Some(blueprint) => {
+            log::info!("room hosting enabled with 6-player blueprint");
+            hosting::handlers::RoomHosting::enabled(Arc::new(hosting::Casino::new(
+                client.clone(),
+                blueprint,
+            )))
+        }
+        None => {
+            log::warn!("room hosting disabled; 6-player blueprint is not loaded");
+            hosting::handlers::RoomHosting::disabled()
+        }
+    });
     let client = web::Data::new(client);
     log::info!("starting unified server");
     HttpServer::new(move || {
@@ -137,7 +187,7 @@ pub async fn run() -> Result<(), std::io::Error> {
                     .allow_any_header(),
             )
             .app_data(api.clone())
-            .app_data(casino.clone())
+            .app_data(room_hosting.clone())
             .app_data(crypto.clone())
             .app_data(registry.clone())
             .app_data(client.clone())
